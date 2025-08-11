@@ -252,8 +252,104 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
     "request_status_rejected": {
         "ru": "❌ Отклонено",
         "uz": "❌ Rad etilgan"
-    }
- 
+    },
+
+       # === МЕНЮ ===
+    "menu_analytics": {
+        "ru": "📊 Аналитика", 
+        "uz": "📊 Analitika"
+    },
+    "menu_manage_products": {
+        "ru": "📦 Управление товарами",
+        "uz": "📦 Mahsulotlarni boshqarish"
+    },
+    "menu_manage_orders": {
+        "ru": "📋 Управление заказами", 
+        "uz": "📋 Buyurtmalarni boshqarish"
+    },
+    "menu_registration_settings": {
+        "ru": "⚙️ Настройки регистрации",
+        "uz": "⚙️ Ro'yxatga olish sozlamalari"
+    },
+
+    # === РЕГИСТРАЦИЯ ===
+    "registration_choose_role": {
+        "ru": "Выберите вашу роль:",
+        "uz": "Rolingizni tanlang:"
+    },
+    "role_client": {
+        "ru": "👤 Клиент",
+        "uz": "👤 Mijoz"
+    },
+    "role_florist": {
+        "ru": "🌸 Флорист", 
+        "uz": "🌸 Florist"
+    },
+    "role_owner": {
+        "ru": "👑 Владелец",
+        "uz": "👑 Egasi"
+    },
+    "registration_closed": {
+        "ru": "❌ Регистрация флористов/владельцев временно закрыта",
+        "uz": "❌ Florist/egalar ro'yxatga olish vaqtincha yopiq"
+    },
+    "ask_role_reason": {
+        "ru": "Объясните, почему вы хотите получить эту роль:",
+        "uz": "Nega bu rolni olishni xohlayotganingizni tushuntiring:"
+    },
+    "role_request_sent": {
+        "ru": "✅ Заявка отправлена администратору",
+        "uz": "✅ Ariza administratorga yuborildi"
+    },
+
+    # === НАСТРОЙКИ ===
+    "settings_title": {
+        "ru": "⚙️ Настройки регистрации:",
+        "uz": "⚙️ Ro'yxatga olish sozlamalari:"
+    },
+    "florist_registration": {
+        "ru": "🌸 Регистрация флористов:",
+        "uz": "🌸 Floristlar ro'yxati:"
+    },
+    "owner_registration": {
+        "ru": "👑 Регистрация владельцев:",
+        "uz": "👑 Egalar ro'yxati:"
+    },
+    "status_open": {
+        "ru": "🟢 Открыта",
+        "uz": "🟢 Ochiq"
+    },
+    "status_closed": {
+        "ru": "🔴 Закрыта", 
+        "uz": "🔴 Yopiq"
+    },
+    "toggle_florist_reg": {
+        "ru": "🔄 Переключить регистрацию флористов",
+        "uz": "🔄 Florist ro'yxatini o'zgartirish"
+    },
+    "toggle_owner_reg": {
+        "ru": "🔄 Переключить регистрацию владельцев",
+        "uz": "🔄 Egalar ro'yxatini o'zgartirish"
+    },
+
+    # === КАТАЛОГ ===
+    "back_to_categories": {
+        "ru": "↩️ К категориям",
+        "uz": "↩️ Kategoriyalarga"
+    },
+    "product_details": {
+        "ru": "📝 Подробнее",
+        "uz": "📝 Batafsil"
+    },
+    # === СИСТЕМНЫЕ ===
+    "start_choose_lang": {
+        "ru": "Выберите язык:",
+        "uz": "Tilni tanlang:"
+    },
+    "menu_title": {
+        "ru": "Выберите действие:",
+        "uz": "Amalni tanlang:"
+    },
 
 }
 

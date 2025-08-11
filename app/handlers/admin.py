@@ -187,26 +187,25 @@ async def manage_registration_settings(callback: types.CallbackQuery):
         await callback.message.edit_text(text, reply_markup=kb)
         await callback.answer()
 
-@router.callback_query(F.data.startswith("toggle_florist_reg_"))
+@router.callback_query(F.data == "toggle_florist_reg")
 async def toggle_florist_registration(callback: types.CallbackQuery):
-    new_value = callback.data.split("_")[3] == "True"
-    
     async for session in get_session():
         lang = await _get_user_lang(session, callback.from_user.id)
         
-        if not await _is_admin(session, callback.from_user.id):
-            await callback.answer(t(lang, "access_denied"), show_alert=True)
-            return
+        # Получаем текущие настройки
+        result = await session.execute(select(Settings))
+        settings = result.scalars().first()
         
-        await session.execute(
-            update(Settings)
-            .where(Settings.key == "florist_registration_open")
-            .values(value=str(new_value).lower())
-        )
+        if not settings:
+            settings = Settings()
+            session.add(settings)
+        
+        # Переключаем
+        settings.florist_registration_open = not settings.florist_registration_open
         await session.commit()
         
-        status = t(lang, "opened") if new_value else t(lang, "closed")
-        await callback.answer(t(lang, "florist_registration_toggled", status=status))
+        # ВАЖНО: Сразу обновляем текст с новыми данными
+        await show_registration_settings_updated(callback, session, lang)
         
 # Просмотр всех заявок
 @router.callback_query(F.data == "pending_requests")
@@ -320,26 +319,50 @@ async def view_request_details(callback: types.CallbackQuery):
 
 
 
-@router.callback_query(F.data.startswith("toggle_owner_reg_"))
+@router.callback_query(F.data == "toggle_owner_reg") 
 async def toggle_owner_registration(callback: types.CallbackQuery):
-    new_value = callback.data.split("_")[3] == "True"
-    
     async for session in get_session():
         lang = await _get_user_lang(session, callback.from_user.id)
         
-        if not await _is_admin(session, callback.from_user.id):
-            await callback.answer(t(lang, "access_denied"), show_alert=True)
-            return
+        result = await session.execute(select(Settings))
+        settings = result.scalars().first()
         
-        await session.execute(
-            update(Settings)
-            .where(Settings.key == "owner_registration_open")
-            .values(value=str(new_value).lower())
-        )
+        if not settings:
+            settings = Settings()
+            session.add(settings)
+        
+        settings.owner_registration_open = not settings.owner_registration_open
         await session.commit()
         
-        status = t(lang, "opened") if new_value else t(lang, "closed")
-        await callback.answer(t(lang, "owner_registration_toggled", status=status))
-        
-        # Обновляем сообщение
-        await manage_registration_settings(callback)
+        # ВАЖНО: Сразу обновляем текст с новыми данными
+        await show_registration_settings_updated(callback, session, lang)
+
+async def show_registration_settings_updated(callback, session, lang):
+    """Обновить сообщение с актуальными настройками"""
+    result = await session.execute(select(Settings))
+    settings = result.scalars().first()
+    
+    if not settings:
+        florist_open = False
+        owner_open = False
+    else:
+        florist_open = settings.florist_registration_open
+        owner_open = settings.owner_registration_open
+    
+    florist_status = t(lang, "status_open") if florist_open else t(lang, "status_closed")
+    owner_status = t(lang, "status_open") if owner_open else t(lang, "status_closed")
+    
+    text = (
+        f"{t(lang, 'settings_title')}\n\n"
+        f"{t(lang, 'florist_registration')} {florist_status}\n"
+        f"{t(lang, 'owner_registration')} {owner_status}"
+    )
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=t(lang, "toggle_florist_reg"), callback_data="toggle_florist_reg")],
+        [types.InlineKeyboardButton(text=t(lang, "toggle_owner_reg"), callback_data="toggle_owner_reg")],
+        [types.InlineKeyboardButton(text="↩️ Назад", callback_data="admin_menu")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer("✅ Обновлено")
