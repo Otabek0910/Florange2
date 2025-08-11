@@ -1,14 +1,23 @@
-import asyncio, os, sys
+import asyncio
+import logging
+import os
+import sys
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.handlers import start, catalog, cart, checkout, admin, orders
+from app.middleware.auth import AuthMiddleware
 from app.database import init_db
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 load_dotenv()
 
 async def main():
+    """Главная функция приложения"""
     # Инициализация БД
     await init_db()
     
@@ -18,11 +27,15 @@ async def main():
         await load_seed_data()
         return
 
-    # ВАЖНО: Добавляем MemoryStorage для FSM
+    # Создание бота и диспетчера
     storage = MemoryStorage()
     bot = Bot(token=os.getenv("BOT_TOKEN"))
     dp = Dispatcher(storage=storage)
 
+    # Подключение middleware
+    dp.update.middleware(AuthMiddleware())
+
+    # Подключение роутеров
     dp.include_router(start.router)
     dp.include_router(catalog.router)
     dp.include_router(cart.router)
@@ -30,7 +43,7 @@ async def main():
     dp.include_router(admin.router)
     dp.include_router(orders.router)
 
-    print("Бот запущен...")
+    print("🌸 Florange Bot запущен...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
