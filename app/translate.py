@@ -117,6 +117,143 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "uz": "Rahmat! Buyurtma yaratildi. Tez orada bog‘lanamiz ✅"
     },
 
+    "my_orders_title": {
+    "ru": "📦 Ваши заказы:",
+    "uz": "📦 Sizning buyurtmalaringiz:"
+    },
+    "no_orders": {
+        "ru": "У вас пока нет заказов.",
+        "uz": "Sizda hali buyurtmalar yo'q."
+    },
+    "back_to_menu": {
+        "ru": "↩️ В меню",
+        "uz": "↩️ Menyuga"
+    },
+    "order_status_new": {
+        "ru": "🆕 Новый",
+        "uz": "🆕 Yangi"
+    },
+    "order_status_delivered": {
+        "ru": "✅ Доставлен",
+        "uz": "✅ Yetkazildi"
+    },
+    "user_not_found": {
+        "ru": "Пользователь не найден. Нажмите /start",
+        "uz": "Foydalanuvchi topilmadi. /start bosing"
+    },
+
+    # Система заявок на роли
+    "choose_role_client_only": {
+        "ru": "Регистрация флористов и владельцев временно закрыта. Вы можете зарегистрироваться только как клиент:",
+        "uz": "Florist va egalar ro'yxatdan o'tishi vaqtincha yopiq. Siz faqat mijoz sifatida ro'yxatdan o'tishingiz mumkin:"
+    },
+    "request_role_reason": {
+        "ru": "Вы подаете заявку на роль {role}. Укажите причину вашего запроса:",
+        "uz": "{role} roli uchun ariza topshiryapsiz. So'rovingizning sababini ko'rsating:"
+    },
+    "role_request_submitted": {
+        "ru": "Ваша заявка на роль {role} отправлена администратору. Ожидайте подтверждения.",
+        "uz": "{role} roli uchun arizangiz administratorga yuborildi. Tasdiqlanishini kuting."
+    },
+    "role_approved": {
+        "ru": "🎉 Ваша заявка на роль {role} одобрена! Теперь вам доступны новые функции.",
+        "uz": "🎉 {role} roli uchun arizangiz tasdiqlandi! Endi sizga yangi funksiyalar mavjud."
+    },
+    "role_rejected": {
+        "ru": "😔 Ваша заявка на роль {role} отклонена администратором.",
+        "uz": "😔 {role} roli uchun arizangiz administrator tomonidan rad etildi."
+    },
+
+    # Админ-панель
+    "access_denied": {
+        "ru": "У вас нет доступа к этой функции.",
+        "uz": "Sizda bu funksiyaga kirish huquqi yo'q."
+    },
+    "request_not_found": {
+        "ru": "Заявка не найдена или уже обработана.",
+        "uz": "Ariza topilmadi yoki allaqachon ko'rib chiqilgan."
+    },
+    "request_approved": {
+        "ru": "Заявка одобрена ✅",
+        "uz": "Ariza tasdiqlandi ✅"
+    },
+    "request_rejected": {
+        "ru": "Заявка отклонена ❌",
+        "uz": "Ariza rad etildi ❌"
+    },
+    "registration_settings": {
+        "ru": "⚙️ Настройки регистрации\n\nФлористы: {florist_status}\nВладельцы: {owner_status}",
+        "uz": "⚙️ Ro'yxatdan o'tish sozlamalari\n\nFloristlar: {florist_status}\nEgalar: {owner_status}"
+    },
+    "open_florist_reg": {
+        "ru": "🟢 Открыть регистрацию флористов",
+        "uz": "🟢 Floristlar ro'yxatdan o'tishini ochish"
+    },
+    "close_florist_reg": {
+        "ru": "🔴 Закрыть регистрацию флористов",
+        "uz": "🔴 Floristlar ro'yxatdan o'tishini yopish"
+    },
+    "open_owner_reg": {
+        "ru": "🟢 Открыть регистрацию владельцев",
+        "uz": "🟢 Egalar ro'yxatdan o'tishini ochish"
+    },
+    "close_owner_reg": {
+        "ru": "🔴 Закрыть регистрацию владельцев",
+        "uz": "🔴 Egalar ro'yxatdan o'tishini yopish"
+    },
+    "open": {
+        "ru": "Открыта",
+        "uz": "Ochiq"
+    },
+    "closed": {
+        "ru": "Закрыта",
+        "uz": "Yopiq"
+    },
+    "opened": {
+        "ru": "открыта",
+        "uz": "ochildi"
+    },
+    "florist_registration_toggled": {
+        "ru": "Регистрация флористов {status}",
+        "uz": "Floristlar ro'yxatdan o'tishi {status}"
+    },
+    "owner_registration_toggled": {
+        "ru": "Регистрация владельцев {status}",
+        "uz": "Egalar ro'yxatdan o'tishi {status}"
+    },
+
+    # Дополнительные меню для владельца
+    "menu_manage_registration": {
+        "ru": "⚙️ Управление регистрацией",
+        "uz": "⚙️ Ro'yxatdan o'tishni boshqarish"
+    },
+    "menu_pending_requests": {
+        "ru": "📋 Заявки на роли",
+        "uz": "📋 Rol uchun arizalar"
+    },
+
+    # Добавить в конец файла переводы для статусов
+    "no_pending_requests": {
+        "ru": "Нет ожидающих заявок.",
+        "uz": "Kutilayotgan arizalar yo'q."
+    },
+    "pending_requests_title": {
+        "ru": "📋 Ожидающие заявки:",
+        "uz": "📋 Kutilayotgan arizalar:"
+    },
+    "request_status_pending": {
+        "ru": "⏳ Ожидает",
+        "uz": "⏳ Kutilmoqda"
+    },
+    "request_status_approved": {
+        "ru": "✅ Одобрено",
+        "uz": "✅ Tasdiqlangan"
+    },
+    "request_status_rejected": {
+        "ru": "❌ Отклонено",
+        "uz": "❌ Rad etilgan"
+    }
+ 
 
 }
 

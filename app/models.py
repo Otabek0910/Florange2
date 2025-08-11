@@ -27,6 +27,15 @@ class InventoryOpEnum(enum.Enum):
     loss = "loss"
     correction = "correction"
 
+class RequestedRoleEnum(enum.Enum):
+    florist = "florist"
+    owner = "owner"
+
+class RequestStatusEnum(enum.Enum):
+    pending = "pending"
+    approved = "approved" 
+    rejected = "rejected"
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
@@ -107,3 +116,25 @@ class InventoryLog(Base):
     note = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     product = relationship("Product")
+
+class Settings(Base):
+    __tablename__ = "settings"
+    id = Column(Integer, primary_key=True)
+    key = Column(String(100), unique=True, nullable=False)
+    value = Column(String(500), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class RoleRequest(Base):
+    __tablename__ = "role_requests"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    requested_role = Column(Enum(RequestedRoleEnum), nullable=False)
+    status = Column(Enum(RequestStatusEnum), default=RequestStatusEnum.pending)
+    reason = Column(Text)  # Причина запроса роли
+    approved_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = relationship("User", foreign_keys=[user_id])
+    approver = relationship("User", foreign_keys=[approved_by])
