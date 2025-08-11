@@ -391,6 +391,55 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "uz": "Buyurtma berish bekor qilindi"
     },
 
+        "no_new_orders": {
+        "ru": "Нет новых заказов",
+        "uz": "Yangi buyurtmalar yo'q"
+    },
+    "new_orders_title": {
+        "ru": "🆕 Новые заказы:",
+        "uz": "🆕 Yangi buyurtmalar:"
+    },
+    "orders_analytics": {
+        "ru": "📊 Аналитика заказов:",
+        "uz": "📊 Buyurtmalar analitikasi:"
+    },
+    "total_orders": {
+        "ru": "Всего заказов",
+        "uz": "Jami buyurtmalar"
+    },
+    "total_revenue": {
+        "ru": "Общая выручка",
+        "uz": "Umumiy daromad"
+    },
+    "order_status_await_florist": {
+        "ru": "⏳ Ожидает флориста",
+        "uz": "⏳ Floristni kutmoqda"
+    },
+    "order_status_accepted": {
+        "ru": "✅ Принят",
+        "uz": "✅ Qabul qilingan"
+    },
+    "order_status_preparing": {
+        "ru": "🔄 Готовится",
+        "uz": "🔄 Tayyorlanmoqda"
+    },
+    "order_status_ready": {
+        "ru": "🎉 Готов",
+        "uz": "🎉 Tayyor"
+    },
+    "order_status_delivering": {
+        "ru": "🚚 Доставляется",
+        "uz": "🚚 Yetkazilmoqda"
+    },
+    "order_status_canceled": {
+        "ru": "❌ Отменен",
+        "uz": "❌ Bekor qilingan"
+    },
+    "order_not_found": {
+        "ru": "Заказ не найден",
+        "uz": "Buyurtma topilmadi"
+    },
+
 }
 
 def t(lang: str, key: str, **kwargs) -> str:

@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Any
 from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,3 +73,39 @@ class OrderService:
         if not order:
             raise OrderNotFoundError(order_id)
         return order
+    
+    async def get_all_orders(self, limit: int = 100) -> List[Order]:
+        """Получить все заказы (для владельца)"""
+        from sqlalchemy import select
+        result = await self.session.execute(
+            select(Order).order_by(Order.created_at.desc()).limit(limit)
+        )
+        return result.scalars().all()
+
+    async def get_orders_analytics(self) -> Dict[str, Any]:
+        """Получить аналитику заказов"""
+        from sqlalchemy import select, func
+        
+        # Общее количество заказов
+        total_result = await self.session.execute(select(func.count(Order.id)))
+        total_orders = total_result.scalar()
+        
+        # Выручка с доставленных заказов
+        revenue_result = await self.session.execute(
+            select(func.sum(Order.total_price))
+            .where(Order.status == OrderStatusEnum.delivered)
+        )
+        total_revenue = revenue_result.scalar() or Decimal("0")
+        
+        # Группировка по статусам
+        status_result = await self.session.execute(
+            select(Order.status, func.count(Order.id))
+            .group_by(Order.status)
+        )
+        status_counts = {status.value: count for status, count in status_result.all()}
+        
+        return {
+            "total_orders": total_orders,
+            "total_revenue": float(total_revenue),
+            "status_counts": status_counts
+        }
