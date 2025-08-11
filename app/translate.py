@@ -91,6 +91,33 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "ru": "сум",
         "uz": "soʻm"
     },
+
+        "ask_address": {
+        "ru": "Введите адрес доставки (улица, дом, подъезд):",
+        "uz": "Yetkazib berish manzilini kiriting (ko‘cha, uy, подъезд):"
+    },
+    "ask_phone": {
+        "ru": "Введите контактный телефон (например, +99890XXXXXXX):",
+        "uz": "Aloqa telefon raqamini kiriting (masalan, +99890XXXXXXX):"
+    },
+    "invalid_phone": {
+        "ru": "Неверный формат телефона. Повторите ещё раз:",
+        "uz": "Telefon formati noto‘g‘ri. Qayta kiriting:"
+    },
+    "ask_datetime": {
+        "ru": "Когда доставить? Укажите дату/время (например, сегодня 18:00):",
+        "uz": "Qachon yetkazamiz? Sana/vaqt kiriting (masalan, bugun 18:00):"
+    },
+    "confirm_order": {
+        "ru": "Подтвердите заказ:",
+        "uz": "Buyurtmani tasdiqlang:"
+    },
+    "order_created": {
+        "ru": "Спасибо! Заказ создан. Мы свяжемся с вами для подтверждения ✅",
+        "uz": "Rahmat! Buyurtma yaratildi. Tez orada bog‘lanamiz ✅"
+    },
+
+
 }
 
 def t(lang: str, key: str, **kwargs) -> str:

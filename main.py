@@ -1,12 +1,11 @@
-import asyncio
-import os
+import asyncio, os
 from dotenv import load_dotenv
-
-# Загружаем .env до импортов, которые читают переменные
-load_dotenv()
-
 from aiogram import Bot, Dispatcher
+
 from app.handlers import start, catalog, cart
+from app.handlers import checkout  # NEW
+
+load_dotenv()
 
 async def main():
     bot = Bot(token=os.getenv("BOT_TOKEN"))
@@ -15,6 +14,7 @@ async def main():
     dp.include_router(start.router)
     dp.include_router(catalog.router)
     dp.include_router(cart.router)
+    dp.include_router(checkout.router)  # NEW
 
     print("Бот запущен...")
     await dp.start_polling(bot)

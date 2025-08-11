@@ -37,20 +37,20 @@ async def show_cart(callback: types.CallbackQuery):
             return
 
         lines = [t(lang, "cart_title"), ""]
-        total: Decimal | int | float = 0
+        total = Decimal("0")
 
         for pid, qty in cart_data.items():
             product = await session.get(Product, int(pid))
             if product:
-                price = product.price if isinstance(product.price, (int, float, Decimal)) else 0
+                price = Decimal(str(product.price))
                 lines.append(f"{product.name} — {qty} × {price} {t(lang, 'currency')}")
-                total += (Decimal(str(price)) if not isinstance(price, Decimal) else price) * Decimal(str(qty))
+                total += price * Decimal(str(qty))
 
         text = "\n".join(lines) + t(lang, "total_line", total=total, currency=t(lang, "currency"))
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=t(lang, "cart_clear"), callback_data="clear_cart")],
-        [types.InlineKeyboardButton(text=t(lang, "cart_checkout"), callback_data="checkout")],
+        [types.InlineKeyboardButton(text=t(lang, "cart_checkout"), callback_data="checkout")],  # сам checkout обрабатывается в checkout.py
     ])
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
@@ -62,12 +62,4 @@ async def clear_cart_cb(callback: types.CallbackQuery):
     async for session in get_session():
         lang = await _get_user_lang(session, callback.from_user.id)
     await callback.message.edit_text(t(lang, "cart_cleared"))
-    await callback.answer()
-
-# Заглушка оформления заказа
-@router.callback_query(F.data == "checkout")
-async def checkout_cb(callback: types.CallbackQuery):
-    async for session in get_session():
-        lang = await _get_user_lang(session, callback.from_user.id)
-    await callback.message.edit_text("🧾 " + t(lang, "cart_checkout"))
     await callback.answer()
