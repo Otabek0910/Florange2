@@ -180,7 +180,43 @@ async def show_main_menu_callback(callback: types.CallbackQuery, lang: str, role
     kb = types.InlineKeyboardMarkup(inline_keyboard=kb_rows)
     await callback.message.edit_text(f"{t(lang, 'menu_title')}", reply_markup=kb)
 
-# Функция уведомления админов
+# Заглушки для нереализованных функций админа
+@router.callback_query(F.data == "analytics")
+async def analytics_placeholder(callback: types.CallbackQuery):
+    await callback.message.edit_text("📊 Аналитика (в разработке)")
+    await callback.answer()
+
+@router.callback_query(F.data == "manage_products") 
+async def manage_products_placeholder(callback: types.CallbackQuery):
+    await callback.message.edit_text("📦 Управление товарами (в разработке)")
+    await callback.answer()
+
+@router.callback_query(F.data == "manage_orders")
+async def manage_orders_placeholder(callback: types.CallbackQuery):
+    await callback.message.edit_text("📋 Управление заказами (в разработке)")
+    await callback.answer()
+
+@router.callback_query(F.data == "registration_settings")
+async def registration_settings_redirect(callback: types.CallbackQuery):
+    # Перенаправляем к админ обработчику
+    await callback.message.edit_text("⚙️ Переход к настройкам регистрации...")
+    # Вызываем функцию из admin.py
+    from app.handlers.admin import manage_registration_settings
+    await manage_registration_settings(callback)
+
+# Обработчик возврата в главное меню
+@router.callback_query(F.data == "main_menu")
+async def main_menu_callback(callback: types.CallbackQuery):
+    async for session in get_session():
+        result = await session.execute(select(User).where(User.tg_id == str(callback.from_user.id)))
+        user = result.scalars().first()
+        
+        if not user:
+            await callback.message.edit_text("Пользователь не найден. Нажмите /start")
+            return
+        
+        await show_main_menu_callback(callback, user.lang or "ru", user.role or "client")
+        await callback.answer()
 async def notify_admins_about_request(bot, request: RoleRequest, lang: str):
     """Уведомить админов о новой заявке на роль"""
     # Находим всех владельцев

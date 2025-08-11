@@ -351,6 +351,24 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "uz": "Amalni tanlang:"
     },
 
+        # === АДМИН ФУНКЦИИ ===
+    "admin_menu": {
+        "ru": "👑 Админ-меню",
+        "uz": "👑 Admin-menyu" 
+    },
+    "back_to_admin": {
+        "ru": "↩️ К админ-меню",
+        "uz": "↩️ Admin-menyuga"
+    },
+    "start_choose_lang": {
+        "ru": "Выберите язык:",
+        "uz": "Tilni tanlang:"
+    },
+    "menu_title": {
+        "ru": "Выберите действие:",
+        "uz": "Amalni tanlang:"
+    },
+
 }
 
 def t(lang: str, key: str, **kwargs) -> str:

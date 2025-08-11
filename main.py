@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.handlers import start, catalog, cart, checkout
+from app.handlers import start, catalog, cart, checkout, admin, orders
 from app.database import init_db
 
 load_dotenv()
@@ -27,6 +27,8 @@ async def main():
     dp.include_router(catalog.router)
     dp.include_router(cart.router)
     dp.include_router(checkout.router)
+    dp.include_router(admin.router)
+    dp.include_router(orders.router)
 
     print("Бот запущен...")
     await dp.start_polling(bot)

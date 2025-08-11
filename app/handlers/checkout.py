@@ -162,7 +162,8 @@ async def create_order(callback: types.CallbackQuery, state: FSMContext):
             for pid, qty in cart.items():
                 p = await session.get(Product, int(pid))
                 if p:
-                    lines.append(f"{p.name} — {qty} × {p.price} {t(lang,'currency')}")
+                    p_name = p.name_ru if lang == "ru" else p.name_uz
+                    lines.append(f"{p_name} — {qty} × {p.price} {t(lang,'currency')}")
             text = (
                 f"🆕 Заказ #{order.id}\n"
                 + "\n".join(lines)
