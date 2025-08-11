@@ -503,6 +503,73 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
     "uz": "Mijoz sifatida ro'yxatdan o'tish uchun /start ni bosing"
     },
 
+      # === КОНСУЛЬТАЦИИ ===
+    "menu_consultation": {
+        "ru": "🌸 Консультация флориста",
+        "uz": "🌸 Florist konsultatsiyasi"
+    },
+    "choose_florist": {
+        "ru": "Выберите флориста для консультации:",
+        "uz": "Konsultatsiya uchun floristni tanlang:"
+    },
+    "no_florists_available": {
+        "ru": "Сейчас нет доступных флористов. Попробуйте позже.",
+        "uz": "Hozir floristlar mavjud emas. Keyinroq urinib ko'ring."
+    },
+    "florist_online": {
+        "ru": "онлайн",
+        "uz": "online"
+    },
+    "florist_new": {
+        "ru": "новый",
+        "uz": "yangi"
+    },
+    "consultation_started": {
+        "ru": "Консультация начата! Напишите ваш вопрос:",
+        "uz": "Konsultatsiya boshlandi! Savolingizni yozing:"
+    },
+    "consultation_busy": {
+        "ru": "У вас уже есть активная консультация",
+        "uz": "Sizda allaqachon faol konsultatsiya bor"
+    },
+    "florist_busy": {
+        "ru": "Флорист сейчас занят. Выберите другого:",
+        "uz": "Florist hozir band. Boshqasini tanlang:"
+    },
+    "end_consultation": {
+        "ru": "🔚 Завершить консультацию",
+        "uz": "🔚 Konsultatsiyani tugatish"
+    },
+    "rate_florist": {
+        "ru": "⭐ Оценить флориста",
+        "uz": "⭐ Floristni baholash"
+    },
+    "consultation_ended": {
+        "ru": "Консультация завершена. Спасибо!",
+        "uz": "Konsultatsiya tugatildi. Rahmat!"
+    },
+    "rate_florist_prompt": {
+        "ru": "Оцените работу флориста от 1 до 5 звезд:",
+        "uz": "Florist ishini 1 dan 5 yulduzgacha baholang:"
+    },
+    "rating_saved": {
+        "ru": "Спасибо за оценку! ⭐",
+        "uz": "Baholash uchun rahmat! ⭐"
+    },
+    "consultation_message_from_client": {
+        "ru": "💬 Сообщение от клиента:",
+        "uz": "💬 Mijozdan xabar:"
+    },
+    "consultation_message_from_florist": {
+        "ru": "🌸 Ответ флориста:",
+        "uz": "🌸 Florist javobi:"
+    },
+
+    "menu_consultation": {
+    "ru": "🌸 Консультация флориста",
+    "uz": "🌸 Florist konsultatsiyasi"
+    },
+
 }
 
 def t(lang: str, key: str, **kwargs) -> str:

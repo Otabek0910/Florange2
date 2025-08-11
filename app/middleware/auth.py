@@ -6,7 +6,7 @@ from app.database import get_session
 from app.services.user_service import UserService
 
 class AuthMiddleware(BaseMiddleware):
-    """Middleware для предоставления сервисов (НЕ создает пользователей автоматически)"""
+    """Middleware для предоставления сервисов и обновления активности флористов"""
     
     async def __call__(
         self,
@@ -14,7 +14,7 @@ class AuthMiddleware(BaseMiddleware):
         event: Update,
         data: Dict[str, Any]
     ) -> Any:
-        """Добавляет user_service и пользователя в контекст (если найден)"""
+        """Добавляет user_service и пользователя в контекст + обновляет активность флористов"""
         user: TgUser = data.get("event_from_user")
         if not user:
             return await handler(event, data)
@@ -26,6 +26,10 @@ class AuthMiddleware(BaseMiddleware):
             try:
                 # ТОЛЬКО ищем пользователя, НЕ СОЗДАЕМ
                 app_user = await user_service.user_repo.get_by_tg_id(str(user.id))
+                
+                # 🆕 Обновляем активность флориста автоматически
+                if app_user and app_user.role.value in ['florist', 'owner']:
+                    await self._update_florist_activity(app_user.id, session)
                 
                 # Добавляем в контекст
                 data["user"] = app_user  # None если не найден
@@ -42,3 +46,14 @@ class AuthMiddleware(BaseMiddleware):
                 data["tg_user"] = user
             
             return await handler(event, data)
+    
+    async def _update_florist_activity(self, user_id: int, session):
+        """Обновить активность флориста"""
+        try:
+            from app.services import FloristService
+            florist_service = FloristService(session)
+            await florist_service.update_activity(user_id)
+            await session.commit()
+        except Exception as e:
+            print(f"Error updating florist activity: {e}")
+            # Не падаем, если не получилось обновить активность

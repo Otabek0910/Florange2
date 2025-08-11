@@ -287,12 +287,21 @@ async def _show_main_menu(message: types.Message, lang: str, role: str = "client
 
 async def _create_main_menu_keyboard(bot, lang: str, role: str) -> types.InlineKeyboardMarkup:
     """Создать клавиатуру главного меню"""
+    
+    # Базовые кнопки для всех
     kb_rows = [
         [types.InlineKeyboardButton(text=t(lang, "menu_catalog"), callback_data="open_catalog")],
-        [types.InlineKeyboardButton(text=t(lang, "menu_cart"), callback_data="open_cart")],
-        [types.InlineKeyboardButton(text=t(lang, "menu_orders"), callback_data="my_orders")]
+        [types.InlineKeyboardButton(text=t(lang, "menu_cart"), callback_data="open_cart")]
     ]
     
+    # 🆕 Добавляем консультацию ТОЛЬКО для клиентов
+    if role == "client":
+        kb_rows.append([types.InlineKeyboardButton(text=t(lang, "menu_consultation"), callback_data="consultation_start")])
+    
+    # Мои заказы для всех
+    kb_rows.append([types.InlineKeyboardButton(text=t(lang, "menu_orders"), callback_data="my_orders")])
+    
+    # Админские кнопки для владельца
     if role == "owner":
         # Получаем количество ожидающих заявок
         pending_count = await _get_pending_requests_count(bot)
@@ -306,6 +315,7 @@ async def _create_main_menu_keyboard(bot, lang: str, role: str) -> types.InlineK
             [types.InlineKeyboardButton(text=requests_text, callback_data="manage_registration")]
         ])
     
+    # Кнопки флориста и владельца
     if role in ["florist", "owner"]:
         kb_rows.append([types.InlineKeyboardButton(text=t(lang, "menu_manage_orders"), callback_data="florist_orders")])
     

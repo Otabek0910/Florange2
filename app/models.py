@@ -36,6 +36,12 @@ class RequestStatusEnum(enum.Enum):
     approved = "approved" 
     rejected = "rejected"
 
+class ConsultationStatusEnum(enum.Enum):
+    active = "active"
+    completed_by_client = "completed_by_client"
+    completed_by_florist = "completed_by_florist"
+    expired = "expired"
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
@@ -140,4 +146,58 @@ class RoleRequest(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     approver = relationship("User", foreign_keys=[approved_by])
+
+class FloristProfile(Base):
+    __tablename__ = "florist_profiles"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    bio = Column(Text, default="")
+    specialization = Column(String(255), default="")
+    is_active = Column(Boolean, default=True)
+    last_seen = Column(DateTime, default=datetime.utcnow)
+    rating = Column(Numeric(3, 2), default=0.0)  # 0.00 до 5.00
+    reviews_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = relationship("User")
+
+class Consultation(Base):
+    __tablename__ = "consultations"
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    florist_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(Enum(ConsultationStatusEnum), default=ConsultationStatusEnum.active)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    client = relationship("User", foreign_keys=[client_id])
+    florist = relationship("User", foreign_keys=[florist_id])
+    messages = relationship("ConsultationMessage", back_populates="consultation")
+
+class ConsultationMessage(Base):
+    __tablename__ = "consultation_messages"
+    id = Column(Integer, primary_key=True)
+    consultation_id = Column(Integer, ForeignKey("consultations.id"), nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    message_text = Column(Text)
+    photo_file_id = Column(String(255))
+    sent_at = Column(DateTime, default=datetime.utcnow)
+    
+    consultation = relationship("Consultation", back_populates="messages")
+    sender = relationship("User")
+
+class FloristReview(Base):
+    __tablename__ = "florist_reviews"
+    id = Column(Integer, primary_key=True)
+    consultation_id = Column(Integer, ForeignKey("consultations.id"), nullable=False)
+    client_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    florist_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    rating = Column(Integer, nullable=False)  # 1-5 звезд
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    consultation = relationship("Consultation")
+    client = relationship("User", foreign_keys=[client_id])
+    florist = relationship("User", foreign_keys=[florist_id])
     

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.handlers import start, catalog, cart, checkout, admin, orders
+from app.handlers import start, catalog, cart, checkout, admin, orders, consultation
 from app.middleware.auth import AuthMiddleware
 from app.database import init_db
 
@@ -43,6 +43,7 @@ async def main():
     dp.include_router(checkout.router)
     dp.include_router(admin.router)
     dp.include_router(orders.router)
+    dp.include_router(consultation.router)
 
     print("🌸 Florange Bot запущен с AuthMiddleware...")
     await dp.start_polling(bot)
