@@ -318,31 +318,7 @@ async def view_request_details(callback: types.CallbackQuery):
         await callback.message.edit_text(text, reply_markup=kb)
         await callback.answer()
 
-# Добавить в конец файла переводы для статусов
-"""
-Добавить в translate.py:
 
-"no_pending_requests": {
-    "ru": "Нет ожидающих заявок.",
-    "uz": "Kutilayotgan arizalar yo'q."
-},
-"pending_requests_title": {
-    "ru": "📋 Ожидающие заявки:",
-    "uz": "📋 Kutilayotgan arizalar:"
-},
-"request_status_pending": {
-    "ru": "⏳ Ожидает",
-    "uz": "⏳ Kutilmoqda"
-},
-"request_status_approved": {
-    "ru": "✅ Одобрено",
-    "uz": "✅ Tasdiqlangan"
-},
-"request_status_rejected": {
-    "ru": "❌ Отклонено",
-    "uz": "❌ Rad etilgan"
-}
-"""
 
 @router.callback_query(F.data.startswith("toggle_owner_reg_"))
 async def toggle_owner_registration(callback: types.CallbackQuery):

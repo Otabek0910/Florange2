@@ -4,7 +4,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, update
 from app.database import get_session
-from app.models import User, RoleEnum
+from app.models import User, RoleEnum, RoleRequest, RequestedRoleEnum, Settings
 from app.translate import t
 
 router = Router()
