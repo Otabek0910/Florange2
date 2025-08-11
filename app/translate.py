@@ -369,6 +369,28 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "uz": "Amalni tanlang:"
     },
 
+    "product_not_found": {
+    "ru": "Товар не найден или недоступен",
+    "uz": "Mahsulot topilmadi yoki mavjud emas"
+    },
+    "item_removed": {
+        "ru": "Товар убран из корзины ✅",
+        "uz": "Mahsulot savatdan olib tashlandi ✅"
+    },
+
+    "invalid_address": {
+    "ru": "Адрес слишком короткий. Укажите подробный адрес (мин. 10 символов):",
+    "uz": "Manzil juda qisqa. Batafsil manzil kiriting (kamida 10 ta belgi):"
+    },
+    "cart_has_invalid_items": {
+        "ru": "В корзине есть недоступные товары. Обновите корзину и попробуйте снова.",
+        "uz": "Savatda mavjud bo'lmagan mahsulotlar bor. Savatni yangilang va qayta urinib ko'ring."
+    },
+    "order_cancelled": {
+        "ru": "Оформление заказа отменено",
+        "uz": "Buyurtma berish bekor qilindi"
+    },
+
 }
 
 def t(lang: str, key: str, **kwargs) -> str:

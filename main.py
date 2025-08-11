@@ -32,8 +32,9 @@ async def main():
     bot = Bot(token=os.getenv("BOT_TOKEN"))
     dp = Dispatcher(storage=storage)
 
-    # Подключение middleware
-    dp.update.middleware(AuthMiddleware())
+    # 🆕 Подключение AuthMiddleware для автоматического создания пользователей
+    dp.message.middleware(AuthMiddleware())
+    dp.callback_query.middleware(AuthMiddleware())
 
     # Подключение роутеров
     dp.include_router(start.router)
@@ -43,7 +44,7 @@ async def main():
     dp.include_router(admin.router)
     dp.include_router(orders.router)
 
-    print("🌸 Florange Bot запущен...")
+    print("🌸 Florange Bot запущен с AuthMiddleware...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

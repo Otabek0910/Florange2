@@ -1,7 +1,6 @@
 from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware
 from aiogram.types import Update, User as TgUser
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.services.user_service import UserService
@@ -20,14 +19,29 @@ class AuthMiddleware(BaseMiddleware):
         if not user:
             return await handler(event, data)
         
+        # Создаем сессию для middleware
         async for session in get_session():
             user_service = UserService(session)
-            app_user = await user_service.get_or_create_user(
-                tg_id=str(user.id),
-                first_name=user.first_name or "",
-                lang="ru"  # default language
-            )
-            data["user"] = app_user
-            data["user_service"] = user_service
             
-        return await handler(event, data)
+            try:
+                # Получаем или создаем пользователя
+                app_user = await user_service.get_or_create_user(
+                    tg_id=str(user.id),
+                    first_name=user.first_name or "",
+                    lang="ru"  # default language, может быть изменен при регистрации
+                )
+                await session.commit()
+                
+                # Добавляем в контекст
+                data["user"] = app_user
+                data["user_service"] = user_service
+                data["session"] = session
+                
+            except Exception as e:
+                # Логируем ошибку, но не блокируем обработку
+                print(f"AuthMiddleware error: {e}")
+                data["user"] = None
+                data["user_service"] = user_service
+                data["session"] = session
+            
+            return await handler(event, data)
