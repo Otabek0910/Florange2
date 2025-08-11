@@ -3,7 +3,13 @@ from aiogram import Router, types, F
 from app.database import get_session
 from app.services import UserService, NotificationService
 from app.repositories import SettingsRepository
-from app.models import RoleEnum, RoleRequest, RequestStatusEnum, RequestedRoleEnum
+from app.models import (
+    RoleEnum, 
+    RoleRequest, 
+    RequestStatusEnum, 
+    RequestedRoleEnum,
+    User  # Для создания пользователей при одобрении
+)
 from app.translate import t
 from app.exceptions import UserNotFoundError
 
@@ -124,10 +130,13 @@ async def show_pending_requests(callback: types.CallbackQuery):
             return
         
         lang = user.lang or "ru"
-        user_service = UserService(session)
         
         # Получаем ожидающие заявки
-        requests = await user_service.user_repo.get_pending_requests()
+        from sqlalchemy import select
+        result = await session.execute(
+            select(RoleRequest).where(RoleRequest.status == RequestStatusEnum.pending)
+        )
+        requests = result.scalars().all()
         
         if not requests:
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -137,31 +146,32 @@ async def show_pending_requests(callback: types.CallbackQuery):
             await callback.answer()
             return
         
+        # Переводы ролей
+        role_names = {
+            "florist": {"ru": "🌸 Флорист", "uz": "🌸 Florist"},
+            "owner": {"ru": "👑 Владелец", "uz": "👑 Egasi"}
+        }
+        
         # Формируем список заявок
         lines = [t(lang, "pending_requests_title"), ""]
         
         for req in requests[:5]:  # Показываем последние 5 заявок
-            request_user = await user_service.user_repo.get(req.user_id)
-            role_text = t(lang, f"role_{req.requested_role.value}")
+            role_text = role_names.get(req.requested_role.value, {}).get(lang, req.requested_role.value)
             date_str = req.created_at.strftime("%d.%m.%Y %H:%M") if req.created_at else ""
             
-            # Формируем полное имя
-            full_name = ""
-            if request_user:
-                if request_user.first_name:
-                    full_name += request_user.first_name
-                if request_user.last_name:
-                    full_name += f" {request_user.last_name}"
-                if not full_name:
-                    full_name = "Без имени"
-            else:
-                full_name = "Пользователь не найден"
+            # Парсим данные пользователя
+            try:
+                user_data = eval(req.user_data)
+                full_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
+                phone = user_data.get('phone', 'Не указан')
+            except:
+                full_name = "Ошибка данных"
+                phone = "Не указан"
             
             lines.append(
                 f"🆔 #{req.id} | {role_text}\n"
                 f"👤 {full_name}\n"
-                f"📞 {request_user.phone if request_user and request_user.phone else 'Не указан'}\n"
-                f"💬 {req.reason[:50]}{'...' if len(req.reason) > 50 else ''}\n"
+                f"📞 {phone}\n"
                 f"📅 {date_str}\n"
             )
         
@@ -170,18 +180,10 @@ async def show_pending_requests(callback: types.CallbackQuery):
         # Кнопки для управления заявками
         buttons = []
         for req in requests[:3]:  # Первые 3 заявки
-            request_user = await user_service.user_repo.get(req.user_id)
-            
-            # Формируем отображаемое имя для кнопки
-            display_name = ""
-            if request_user:
-                if request_user.first_name:
-                    display_name = request_user.first_name
-                    if request_user.last_name:
-                        display_name += f" {request_user.last_name[:1]}."  # Только первая буква фамилии
-                else:
-                    display_name = "Без имени"
-            else:
+            try:
+                user_data = eval(req.user_data)
+                display_name = user_data.get('first_name', 'Без имени')
+            except:
                 display_name = "N/A"
             
             role_emoji = "🌸" if req.requested_role == RequestedRoleEnum.florist else "👑"
@@ -214,7 +216,6 @@ async def view_request_details(callback: types.CallbackQuery):
             return
         
         lang = user.lang or "ru"
-        user_service = UserService(session)
         
         # Получаем заявку
         from sqlalchemy import select
@@ -225,28 +226,30 @@ async def view_request_details(callback: types.CallbackQuery):
             await callback.answer(t(lang, "request_not_found"), show_alert=True)
             return
         
-        request_user = await user_service.user_repo.get(request.user_id)
-        role_text = t(lang, f"role_{request.requested_role.value}")
+        # Переводы ролей
+        role_names = {
+            "florist": {"ru": "Флорист", "uz": "Florist"},
+            "owner": {"ru": "Владелец", "uz": "Egasi"}
+        }
+        
+        role_text = role_names.get(request.requested_role.value, {}).get(lang, request.requested_role.value)
         date_str = request.created_at.strftime("%d.%m.%Y %H:%M") if request.created_at else ""
         
-        # Формируем полное имя
-        full_name = "Не указано"
-        if request_user:
-            parts = []
-            if request_user.first_name:
-                parts.append(request_user.first_name)
-            if request_user.last_name:
-                parts.append(request_user.last_name)
-            if parts:
-                full_name = " ".join(parts)
+        # Парсим данные пользователя
+        try:
+            user_data = eval(request.user_data)
+            full_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
+            phone = user_data.get('phone', 'Не указан')
+        except:
+            full_name = "Ошибка данных"
+            phone = "Не указан"
         
         text = (
             f"📋 Заявка #{request.id}\n\n"
             f"👤 {full_name}\n"
-            f"📞 {request_user.phone if request_user and request_user.phone else 'Не указан'}\n"
-            f"🆔 Telegram ID: {request_user.tg_id if request_user else 'N/A'}\n"
+            f"📞 {phone}\n"
+            f"🆔 Telegram ID: {request.user_tg_id}\n"
             f"🎯 Роль: {role_text}\n"
-            f"💬 Причина: {request.reason}\n"
             f"📅 Дата: {date_str}"
         )
         
@@ -263,6 +266,7 @@ async def view_request_details(callback: types.CallbackQuery):
         
         await callback.message.edit_text(text, reply_markup=kb)
         await callback.answer()
+        
 @router.callback_query(F.data.startswith("approve_req_"))
 async def approve_request(callback: types.CallbackQuery):
     """Одобрить заявку на роль"""
@@ -277,7 +281,6 @@ async def approve_request(callback: types.CallbackQuery):
         
         lang = user.lang or "ru"
         user_service = UserService(session)
-        notification_service = NotificationService(callback.bot)
         
         # Получаем заявку
         from sqlalchemy import select
@@ -288,41 +291,56 @@ async def approve_request(callback: types.CallbackQuery):
             await callback.answer(t(lang, "request_not_found"), show_alert=True)
             return
         
-        # Получаем пользователя заявки
-        request_user = await user_service.user_repo.get(request.user_id)
+        # Парсим данные пользователя
+        import json
+        try:
+            user_data = eval(request.user_data)  # Простой парсинг
+        except:
+            await callback.answer("Ошибка данных заявки", show_alert=True)
+            return
         
-        # Обновляем роль пользователя
-        new_role = RoleEnum.florist if request.requested_role == RequestedRoleEnum.florist else RoleEnum.owner
-        request_user.role = new_role
+        # Создаем пользователя с нужной ролью
+        target_role = RoleEnum.florist if request.requested_role == RequestedRoleEnum.florist else RoleEnum.owner
         
-        # Обновляем статус заявки
+        new_user = User(
+            tg_id=user_data["tg_id"],
+            first_name=user_data["first_name"],
+            last_name=user_data["last_name"],
+            phone=user_data["phone"],
+            lang=user_data["lang"],
+            role=target_role  # Сразу нужная роль!
+        )
+        
+        await user_service.user_repo.create(new_user)
+        await session.flush()
+        
+        # Обновляем заявку
         request.status = RequestStatusEnum.approved
         request.approved_by = user.id
+        request.user_id = new_user.id  # Связываем с созданным пользователем
         
         await session.commit()
         
-        # Уведомляем пользователя с ОБНОВЛЕННЫМ меню
-        role_text = t(request_user.lang or "ru", f"role_{request.requested_role.value}")
+        # Уведомляем пользователя
+        role_text = t(user_data["lang"], f"role_{request.requested_role.value}")
         try:
-            # Отправляем уведомление
             await callback.bot.send_message(
-                chat_id=int(request_user.tg_id),
-                text=t(request_user.lang or "ru", "role_approved", role=role_text)
+                chat_id=int(user_data["tg_id"]),
+                text=t(user_data["lang"], "role_approved", role=role_text)
             )
             
-            # ВАЖНО: Показываем новое меню с правами роли
+            # Показываем меню с нужными правами
             from app.handlers.start import _show_main_menu_to_user
             await _show_main_menu_to_user(
                 callback.bot, 
-                int(request_user.tg_id), 
-                request_user.lang or "ru", 
-                new_role.value
+                int(user_data["tg_id"]), 
+                user_data["lang"], 
+                target_role.value
             )
             
         except Exception as e:
             print(f"Error sending approval notification: {e}")
         
-        # Обновляем сообщение админа
         await callback.message.edit_text(
             callback.message.text + f"\n\n✅ Одобрено администратором {user.first_name}",
             reply_markup=None
@@ -343,7 +361,6 @@ async def reject_request(callback: types.CallbackQuery):
             return
         
         lang = user.lang or "ru"
-        user_service = UserService(session)
         
         # Получаем заявку
         from sqlalchemy import select
@@ -354,8 +371,11 @@ async def reject_request(callback: types.CallbackQuery):
             await callback.answer(t(lang, "request_not_found"), show_alert=True)
             return
         
-        # Получаем пользователя заявки
-        request_user = await user_service.user_repo.get(request.user_id)
+        # Парсим данные пользователя для уведомления
+        try:
+            user_data = eval(request.user_data)
+        except:
+            user_data = {"tg_id": request.user_tg_id, "lang": "ru"}
         
         # Обновляем статус заявки
         request.status = RequestStatusEnum.rejected
@@ -363,17 +383,20 @@ async def reject_request(callback: types.CallbackQuery):
         
         await session.commit()
         
-        # Уведомляем пользователя
-        role_text = t(request_user.lang or "ru", f"role_{request.requested_role.value}")
+        # ВАЖНО: При отклонении НЕ создаем пользователя вообще!
+        # Пользователь останется незарегистрированным
+        
+        # Уведомляем пользователя об отклонении
+        role_text = t(user_data.get("lang", "ru"), f"role_{request.requested_role.value}")
         try:
             await callback.bot.send_message(
-                chat_id=int(request_user.tg_id),
-                text=t(request_user.lang or "ru", "role_rejected", role=role_text)
+                chat_id=int(user_data["tg_id"]),
+                text=t(user_data.get("lang", "ru"), "role_rejected", role=role_text) + 
+                     f"\n\n{t(user_data.get('lang', 'ru'), 'can_register_as_client')}"
             )
         except:
             pass
         
-        # Обновляем сообщение
         await callback.message.edit_text(
             callback.message.text + f"\n\n❌ Отклонено администратором {user.first_name}",
             reply_markup=None

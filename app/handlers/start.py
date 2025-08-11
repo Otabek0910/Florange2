@@ -5,19 +5,22 @@ from aiogram.fsm.context import FSMContext
 
 from app.repositories import SettingsRepository
 from app.services import NotificationService
-from app.models import RequestedRoleEnum, RoleRequest, RoleEnum, User
+from app.models import (
+    RequestedRoleEnum, 
+    RoleRequest, 
+    RoleEnum, 
+    User  # ВАЖНО: должен быть импортирован
+)
 from app.translate import t
 from app.utils.validators import validate_phone
 
 router = Router()
-
 # FSM состояния для регистрации
 class Registration(StatesGroup):
     CHOOSE_LANG = State()
     CHOOSE_ROLE = State()
     ASK_NAME = State()         # НОВОЕ состояние
     ASK_PHONE = State()
-    REQUEST_REASON = State()
 
 @router.message(Command("start"))
 async def start_cmd(message: types.Message, state: FSMContext, user=None, tg_user=None):
@@ -171,22 +174,21 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
     
     await state.update_data(phone=phone)
     
-    # Убираем клавиатуру БЕЗ сообщения
+    # Убираем клавиатуру
     try:
         await message.answer("...", reply_markup=types.ReplyKeyboardRemove())
-        # Удаляем это служебное сообщение сразу
         await message.bot.delete_message(message.chat.id, message.message_id + 1)
     except:
         pass
     
+    # Разделяем имя
+    name_parts = full_name.split(maxsplit=1)
+    first_name = name_parts[0] if name_parts else ""
+    last_name = name_parts[1] if len(name_parts) > 1 else ""
+    
     if role == "client":
         # Создаем клиента сразу
         if user_service and session:
-            # Разделяем имя на first_name и last_name
-            name_parts = full_name.split(maxsplit=1)
-            first_name = name_parts[0] if name_parts else ""
-            last_name = name_parts[1] if len(name_parts) > 1 else ""
-            
             new_user = User(
                 tg_id=data["tg_id"],
                 first_name=first_name,
@@ -199,14 +201,10 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
             await user_service.user_repo.create(new_user)
             await session.commit()
         
-        # АГРЕССИВНАЯ ОЧИСТКА: удаляем все сообщения регистрации
-        try:
-            for i in range(10):  # Удаляем последние 10 сообщений
-                await message.bot.delete_message(message.chat.id, message.message_id - i)
-        except:
-            pass
+        # АГРЕССИВНАЯ ОЧИСТКА для клиентов
+        await _aggressive_chat_cleanup(message, 20)
         
-        # Отправляем финальное сообщение и меню
+        # Финальное сообщение и меню
         welcome_msg = await message.answer(t(lang, "registration_complete"))
         await _show_main_menu(message, lang, "client")
         
@@ -217,11 +215,52 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
         await state.clear()
         
     else:
-        # Для флористов/владельцев запрашиваем причину
-        await state.set_state(Registration.REQUEST_REASON)
-        reason_msg = await message.answer(t(lang, "ask_role_reason"))
-        # Сохраняем ID сообщения для удаления
-        await state.update_data(reason_msg_id=reason_msg.message_id)
+        # Для флористов/владельцев создаем заявку БЕЗ запроса причины
+        if not session:
+            await message.answer("Ошибка: сессия не найдена")
+            await state.clear()
+            return
+        
+        # Сохраняем данные для создания после одобрения
+        user_data = {
+            "tg_id": data["tg_id"],
+            "first_name": first_name,
+            "last_name": last_name,
+            "phone": phone,
+            "lang": lang,
+            "requested_role": role
+        }
+        
+        # Создаем заявку БЕЗ причины
+        role_enum = RequestedRoleEnum.florist if role == "florist" else RequestedRoleEnum.owner
+        request = RoleRequest(
+            user_tg_id=data["tg_id"],
+            requested_role=role_enum,
+            reason="Автоматическая заявка",  # Стандартная причина
+            user_data=str(user_data)
+        )
+        session.add(request)
+        await session.flush()
+        
+        # Уведомляем админов
+        if user_service:
+            notification_service = NotificationService(message.bot)
+            admins = await user_service.get_admins()
+            await notification_service.notify_admins_about_role_request(admins, request)
+        
+        await session.commit()
+        
+        # АГРЕССИВНАЯ ОЧИСТКА для флористов
+        await _aggressive_chat_cleanup(message, 20)
+        
+        # Финальное сообщение
+        final_msg = await message.answer(t(lang, "role_request_sent"))
+        
+        # Удаляем финальное сообщение через 5 секунд
+        import asyncio
+        asyncio.create_task(_delete_message_later(message.bot, message.chat.id, final_msg.message_id, 5))
+        
+        await state.clear()
 
 @router.message(Registration.REQUEST_REASON)
 async def process_reason(message: types.Message, state: FSMContext, user_service=None, session=None):
@@ -238,13 +277,8 @@ async def process_reason(message: types.Message, state: FSMContext, user_service
         return
     
     # Удаляем сообщение пользователя
-    await message.delete()
-    
-    # Удаляем сообщение с вопросом о причине
     try:
-        reason_msg_id = data.get("reason_msg_id")
-        if reason_msg_id:
-            await message.bot.delete_message(message.chat.id, reason_msg_id)
+        await message.delete()
     except:
         pass
     
@@ -253,24 +287,25 @@ async def process_reason(message: types.Message, state: FSMContext, user_service
     first_name = name_parts[0] if name_parts else ""
     last_name = name_parts[1] if len(name_parts) > 1 else ""
     
-    # Создаем пользователя как клиента (роль изменится при одобрении)
-    new_user = User(
-        tg_id=data["tg_id"],
-        first_name=first_name,
-        last_name=last_name,
-        phone=data["phone"],
-        lang=lang,
-        role=RoleEnum.client  # Временно клиент
-    )
-    await user_service.user_repo.create(new_user)
-    await session.flush()
+    # ВАЖНО: НЕ создаем пользователя сразу!
+    # Сохраняем данные для создания после одобрения
+    user_data = {
+        "tg_id": data["tg_id"],
+        "first_name": first_name,
+        "last_name": last_name,
+        "phone": data["phone"],
+        "lang": lang,
+        "requested_role": role
+    }
     
-    # Создаем заявку на роль
+    # Создаем заявку БЕЗ создания пользователя
     role_enum = RequestedRoleEnum.florist if role == "florist" else RequestedRoleEnum.owner
     request = RoleRequest(
-        user_id=new_user.id,
+        user_id=None,  # Пока нет пользователя
+        user_tg_id=data["tg_id"],  # Добавим это поле в модель
         requested_role=role_enum,
-        reason=reason
+        reason=reason,
+        user_data=str(user_data)  # Сохраняем данные как JSON строку
     )
     session.add(request)
     await session.flush()
@@ -283,14 +318,10 @@ async def process_reason(message: types.Message, state: FSMContext, user_service
     
     await session.commit()
     
-    # АГРЕССИВНАЯ ОЧИСТКА всех сообщений регистрации
-    try:
-        for i in range(15):  # Удаляем последние 15 сообщений
-            await message.bot.delete_message(message.chat.id, message.message_id - i)
-    except:
-        pass
+    # Очищаем чат
+    await _aggressive_chat_cleanup(message, 15)
     
-    # Отправляем финальное сообщение
+    # Финальное сообщение
     final_msg = await message.answer(t(lang, "role_request_sent"))
     
     # Удаляем финальное сообщение через 5 секунд
@@ -298,6 +329,18 @@ async def process_reason(message: types.Message, state: FSMContext, user_service
     asyncio.create_task(_delete_message_later(message.bot, message.chat.id, final_msg.message_id, 5))
     
     await state.clear()
+
+async def _aggressive_chat_cleanup(message, count: int = 20):
+    """Агрессивная очистка чата"""
+    try:
+        # Удаляем сообщения в обратном порядке
+        for i in range(count):
+            try:
+                await message.bot.delete_message(message.chat.id, message.message_id - i)
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"Chat cleanup error: {e}")
 
 async def _delete_message_later(bot, chat_id: int, message_id: int, delay: int):
     """Удалить сообщение через delay секунд"""
@@ -307,7 +350,6 @@ async def _delete_message_later(bot, chat_id: int, message_id: int, delay: int):
         await bot.delete_message(chat_id, message_id)
     except:
         pass
-
 # Вспомогательные функции
 async def _show_main_menu(message: types.Message, lang: str, role: str = "client"):
     """Показать главное меню"""

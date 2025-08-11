@@ -498,6 +498,11 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "uz": "🌍 Tilni tanlang:"
     },
 
+    "can_register_as_client": {
+    "ru": "Вы можете зарегистрироваться как клиент, нажав /start",
+    "uz": "Mijoz sifatida ro'yxatdan o'tish uchun /start ni bosing"
+    },
+
 }
 
 def t(lang: str, key: str, **kwargs) -> str:

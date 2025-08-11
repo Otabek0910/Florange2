@@ -129,15 +129,15 @@ class Settings(Base):
 class RoleRequest(Base):
     __tablename__ = "role_requests"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_tg_id = Column(String(50), nullable=True)
     requested_role = Column(Enum(RequestedRoleEnum), nullable=False)
     status = Column(Enum(RequestStatusEnum), default=RequestStatusEnum.pending)
-    reason = Column(Text)  # Причина запроса роли
+    reason = Column(Text, default="Автоматическая заявка")  # Дефолтное значение
+    user_data = Column(Text)
     approved_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    user = relationship("User", foreign_keys=[user_id])
     approver = relationship("User", foreign_keys=[approved_by])
-
     
