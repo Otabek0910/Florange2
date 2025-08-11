@@ -4,3 +4,6 @@ sqlalchemy
 pydantic
 alembic
 python-dotenv
+aiogram==3.0.0
+redis
+psycopg2-binary

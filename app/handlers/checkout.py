@@ -85,7 +85,8 @@ async def confirm_order(message: types.Message, state: FSMContext):
             price = Decimal(str(product.price))
             qty_d = Decimal(str(qty))
             total += price * qty_d
-            lines.append(f"{product.name} — {qty} × {price} {t(lang,'currency')}")
+            name = product.name_ru if lang == "ru" else product.name_uz
+            lines.append(f"{name} — {qty} × {price} {t(lang,'currency')}")
 
     data = await state.get_data()
     text = (

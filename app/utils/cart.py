@@ -1,58 +1,43 @@
-from aiogram import Router, types, F
-from sqlalchemy import select
-from app.database import get_session
-from app.models import Product, User
-from app.utils.cart import add_to_cart, get_cart, clear_cart
-from app.translate import t
+import redis
+import json
+from typing import Dict, Optional
+from app.config import settings
 
-router = Router()
+# Подключение к Redis
+redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
-@router.callback_query(F.data.startswith("add_"))
-async def add_product(callback: types.CallbackQuery):
-    pid = int(callback.data.split("_")[1])
+def add_to_cart(user_id: int, product_id: int, qty: int = 1) -> None:
+    """Добавить товар в корзину"""
+    key = f"cart:{user_id}"
+    current = redis_client.hget(key, str(product_id))
+    current_qty = int(current) if current else 0
+    new_qty = current_qty + qty
+    
+    redis_client.hset(key, str(product_id), new_qty)
+    redis_client.expire(key, 900)  # TTL 15 минут
 
-    async for session in get_session():
-        user = await session.execute(select(User).where(User.tg_id == str(callback.from_user.id)))
-        user_lang = user.scalars().first().lang or "ru"
+def get_cart(user_id: int) -> Dict[str, int]:
+    """Получить корзину пользователя"""
+    key = f"cart:{user_id}"
+    cart_data = redis_client.hgetall(key)
+    return {pid: int(qty) for pid, qty in cart_data.items()} if cart_data else {}
 
-    add_to_cart(callback.from_user.id, pid)
-    await callback.answer(t(user_lang, "item_added"), show_alert=False)
+def clear_cart(user_id: int) -> None:
+    """Очистить корзину"""
+    key = f"cart:{user_id}"
+    redis_client.delete(key)
 
-@router.callback_query(F.data == "open_cart")
-async def show_cart(callback: types.CallbackQuery):
-    async for session in get_session():
-        user = await session.execute(select(User).where(User.tg_id == str(callback.from_user.id)))
-        user_lang = user.scalars().first().lang or "ru"
-
-    cart_data = get_cart(callback.from_user.id)
-    if not cart_data:
-        await callback.message.edit_text(t(user_lang, "cart_empty"))
+def remove_from_cart(user_id: int, product_id: int, qty: int = 1) -> None:
+    """Убрать товар из корзины"""
+    key = f"cart:{user_id}"
+    current = redis_client.hget(key, str(product_id))
+    if not current:
         return
-
-    text = f"{t(user_lang, 'cart_title')}\n\n"
-    total = 0
-
-    async for session in get_session():
-        for pid, qty in cart_data.items():
-            product = await session.get(Product, int(pid))
-            if product:
-                text += f"{product.name} — {qty} × {product.price} сум\n"
-                total += product.price * qty
-
-    text += f"\n<b>Итого:</b> {total} сум"
-
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=t(user_lang, "cart_clear"), callback_data="clear_cart")],
-        [types.InlineKeyboardButton(text=t(user_lang, "cart_checkout"), callback_data="checkout")]
-    ])
-
-    await callback.message.edit_text(text, reply_markup=kb)
-
-@router.callback_query(F.data == "clear_cart")
-async def clear_cart_cb(callback: types.CallbackQuery):
-    async for session in get_session():
-        user = await session.execute(select(User).where(User.tg_id == str(callback.from_user.id)))
-        user_lang = user.scalars().first().lang or "ru"
-
-    clear_cart(callback.from_user.id)
-    await callback.message.edit_text(t(user_lang, "cart_cleared"))
+    
+    current_qty = int(current)
+    new_qty = max(0, current_qty - qty)
+    
+    if new_qty == 0:
+        redis_client.hdel(key, str(product_id))
+    else:
+        redis_client.hset(key, str(product_id), new_qty)

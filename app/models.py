@@ -1,30 +1,109 @@
-from sqlalchemy import Column, Integer, String, Text, Numeric, Boolean, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Text, Numeric, Boolean, ForeignKey, DateTime, Enum
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
+import enum
 
 Base = declarative_base()
+
+class RoleEnum(enum.Enum):
+    client = "client"
+    florist = "florist" 
+    courier = "courier"
+    owner = "owner"
+
+class OrderStatusEnum(enum.Enum):
+    new = "new"
+    await_florist = "await_florist"
+    accepted = "accepted"
+    preparing = "preparing"
+    ready = "ready"
+    delivering = "delivering"
+    delivered = "delivered"
+    canceled = "canceled"
+
+class InventoryOpEnum(enum.Enum):
+    incoming = "incoming"
+    sale = "sale"
+    loss = "loss"
+    correction = "correction"
 
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
-    tg_id = Column(String, unique=True, nullable=False)
-    first_name = Column(String)
-    lang = Column(String, default="ru")
+    tg_id = Column(String(50), unique=True, nullable=False)
+    first_name = Column(String(100))
+    phone = Column(String(20))
+    lang = Column(String(5))
+    role = Column(Enum(RoleEnum), default=RoleEnum.client)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Category(Base):
     __tablename__ = "categories"
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
+    name_ru = Column(String(255), nullable=False)
+    name_uz = Column(String(255), nullable=False)
+    sort = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
     products = relationship("Product", back_populates="category")
+
+    @property
+    def name(self):
+        return self.name_ru  # Для обратной совместимости
 
 class Product(Base):
     __tablename__ = "products"
     id = Column(Integer, primary_key=True)
-    category_id = Column(Integer, ForeignKey("categories.id"))
-    name = Column(String, nullable=False)
-    description = Column(Text)
-    price = Column(Numeric(10, 2))
-    photo_file_id = Column(String)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
+    name_ru = Column(String(255), nullable=False)
+    name_uz = Column(String(255), nullable=False)
+    desc_ru = Column(Text)
+    desc_uz = Column(Text)
+    price = Column(Numeric(10, 2), nullable=False)
+    photo_file_id = Column(String(255))
+    photo_url = Column(String(500))
+    stock_qty = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
     category = relationship("Category", back_populates="products")
+
+    @property
+    def name(self):
+        return self.name_ru  # Для обратной совместимости
+    
+    @property 
+    def description(self):
+        return self.desc_ru  # Для обратной совместимости
+
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    total_price = Column(Numeric(10, 2), nullable=False, default=0)
+    status = Column(Enum(OrderStatusEnum), default=OrderStatusEnum.new)
+    address = Column(Text)
+    phone = Column(String(20))
+    slot_at = Column(DateTime)
+    comment = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User")
+    items = relationship("OrderItem", back_populates="order")
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    qty = Column(Integer, nullable=False)
+    price = Column(Numeric(10, 2), nullable=False)
+    order = relationship("Order", back_populates="items")
+    product = relationship("Product")
+
+class InventoryLog(Base):
+    __tablename__ = "inventory_log"
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    op = Column(Enum(InventoryOpEnum), nullable=False)
+    qty = Column(Integer, nullable=False)
+    note = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    product = relationship("Product")

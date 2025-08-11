@@ -43,14 +43,16 @@ async def show_cart(callback: types.CallbackQuery):
             product = await session.get(Product, int(pid))
             if product:
                 price = Decimal(str(product.price))
-                lines.append(f"{product.name} — {qty} × {price} {t(lang, 'currency')}")
+                # FIXED: Использовать правильные поля
+                name = product.name_ru if lang == "ru" else product.name_uz
+                lines.append(f"{name} — {qty} × {price} {t(lang, 'currency')}")
                 total += price * Decimal(str(qty))
 
         text = "\n".join(lines) + t(lang, "total_line", total=total, currency=t(lang, "currency"))
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=t(lang, "cart_clear"), callback_data="clear_cart")],
-        [types.InlineKeyboardButton(text=t(lang, "cart_checkout"), callback_data="checkout")],  # сам checkout обрабатывается в checkout.py
+        [types.InlineKeyboardButton(text=t(lang, "cart_checkout"), callback_data="checkout")],
     ])
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()

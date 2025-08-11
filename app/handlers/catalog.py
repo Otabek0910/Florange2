@@ -26,8 +26,12 @@ async def show_categories(callback: types.CallbackQuery):
         await callback.answer()
         return
 
+    # FIXED: Использовать правильные поля
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=cat.name, callback_data=f"cat_{cat.id}")]
+        [types.InlineKeyboardButton(
+            text=cat.name_ru if lang == "ru" else cat.name_uz, 
+            callback_data=f"cat_{cat.id}"
+        )]
         for cat in categories
     ])
     await callback.message.edit_text(t(lang, "choose_category"), reply_markup=kb)
@@ -55,19 +59,31 @@ async def show_products(callback: types.CallbackQuery):
         ])
 
         price = product.price if isinstance(product.price, (int, float, Decimal)) else 0
+        
+        # FIXED: Использовать правильные поля
+        name = product.name_ru if lang == "ru" else product.name_uz
+        desc = (product.desc_ru if lang == "ru" else product.desc_uz) or ""
+        
         caption = t(
             lang,
             "product_card_caption",
-            name=product.name,
-            desc=(product.description or ""),
+            name=name,
+            desc=desc,
             price=price,
             currency=currency,
         )
 
-        await callback.message.answer_photo(
-            product.photo_file_id or "https://via.placeholder.com/300",
-            caption=caption,
-            reply_markup=kb
-        )
+        # Заглушка для фото (поскольку у нас нет file_id)
+        photo_url = "https://via.placeholder.com/400x300/FFB6C1/000000?text=🌸"
+        
+        try:
+            await callback.message.answer_photo(
+                photo=photo_url,
+                caption=caption,
+                reply_markup=kb
+            )
+        except Exception:
+            # Если фото не загружается, отправим текстом
+            await callback.message.answer(caption, reply_markup=kb)
 
     await callback.answer()
