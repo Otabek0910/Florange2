@@ -440,6 +440,64 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "uz": "Buyurtma topilmadi"
     },
 
+    "ask_phone_registration": {
+    "ru": "📞 Поделитесь номером телефона для связи:",
+    "uz": "📞 Aloqa uchun telefon raqamingizni ulashing:"
+    },
+    "share_phone_button": {
+        "ru": "📱 Отправить мой номер",
+        "uz": "📱 Raqamimni yuborish"
+    },
+    "enter_manually_button": {
+        "ru": "✍️ Ввести вручную", 
+        "uz": "✍️ Qo'lda kiritish"
+    },
+    "enter_phone_manually": {
+        "ru": "📞 Введите номер телефона (например, +998901234567):",
+        "uz": "📞 Telefon raqamini kiriting (masalan, +998901234567):"
+    },
+    "registration_complete": {
+        "ru": "✅ Регистрация завершена! Добро пожаловать!",
+        "uz": "✅ Ro'yxatdan o'tish tugallandi! Xush kelibsiz!"
+    },
+    "choose_language": {
+        "ru": "🌍 Выберите язык:",
+        "uz": "🌍 Tilni tanlang:"
+    },
+
+    "ask_full_name": {
+    "ru": "👤 Введите ваше имя и фамилию:",
+    "uz": "👤 Ismingiz va familiyangizni kiriting:"
+    },
+    "invalid_name": {
+        "ru": "❌ Имя слишком короткое. Введите минимум 2 символа:",
+        "uz": "❌ Ism juda qisqa. Kamida 2 ta harf kiriting:"
+    },
+    "ask_phone_registration": {
+        "ru": "📞 Поделитесь номером телефона для связи:",
+        "uz": "📞 Aloqa uchun telefon raqamingizni ulashing:"
+    },
+    "share_phone_button": {
+        "ru": "📱 Отправить мой номер",
+        "uz": "📱 Raqamimni yuborish"
+    },
+    "enter_manually_button": {
+        "ru": "✍️ Ввести вручную", 
+        "uz": "✍️ Qo'lda kiritish"
+    },
+    "enter_phone_manually": {
+        "ru": "📞 Введите номер телефона (например, +998901234567):",
+        "uz": "📞 Telefon raqamini kiriting (masalan, +998901234567):"
+    },
+    "registration_complete": {
+        "ru": "✅ Регистрация завершена! Добро пожаловать!",
+        "uz": "✅ Ro'yxatdan o'tish tugallandi! Xush kelibsiz!"
+    },
+    "choose_language": {
+        "ru": "🌍 Выберите язык:",
+        "uz": "🌍 Tilni tanlang:"
+    },
+
 }
 
 def t(lang: str, key: str, **kwargs) -> str:

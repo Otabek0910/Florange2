@@ -6,7 +6,7 @@ from app.database import get_session
 from app.services.user_service import UserService
 
 class AuthMiddleware(BaseMiddleware):
-    """Middleware для аутентификации пользователей"""
+    """Middleware для предоставления сервисов (НЕ создает пользователей автоматически)"""
     
     async def __call__(
         self,
@@ -14,7 +14,7 @@ class AuthMiddleware(BaseMiddleware):
         event: Update,
         data: Dict[str, Any]
     ) -> Any:
-        """Добавляет пользователя в контекст"""
+        """Добавляет user_service и пользователя в контекст (если найден)"""
         user: TgUser = data.get("event_from_user")
         if not user:
             return await handler(event, data)
@@ -24,18 +24,14 @@ class AuthMiddleware(BaseMiddleware):
             user_service = UserService(session)
             
             try:
-                # Получаем или создаем пользователя
-                app_user = await user_service.get_or_create_user(
-                    tg_id=str(user.id),
-                    first_name=user.first_name or "",
-                    lang="ru"  # default language, может быть изменен при регистрации
-                )
-                await session.commit()
+                # ТОЛЬКО ищем пользователя, НЕ СОЗДАЕМ
+                app_user = await user_service.user_repo.get_by_tg_id(str(user.id))
                 
                 # Добавляем в контекст
-                data["user"] = app_user
+                data["user"] = app_user  # None если не найден
                 data["user_service"] = user_service
                 data["session"] = session
+                data["tg_user"] = user  # Добавляем Telegram данные
                 
             except Exception as e:
                 # Логируем ошибку, но не блокируем обработку
@@ -43,5 +39,6 @@ class AuthMiddleware(BaseMiddleware):
                 data["user"] = None
                 data["user_service"] = user_service
                 data["session"] = session
+                data["tg_user"] = user
             
             return await handler(event, data)

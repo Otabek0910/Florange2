@@ -242,7 +242,7 @@ async def approve_request(callback: types.CallbackQuery):
         notification_service = NotificationService(callback.bot)
         
         # Получаем заявку
-        from sqlalchemy import select, update
+        from sqlalchemy import select
         result = await session.execute(select(RoleRequest).where(RoleRequest.id == request_id))
         request = result.scalars().first()
         
@@ -263,17 +263,28 @@ async def approve_request(callback: types.CallbackQuery):
         
         await session.commit()
         
-        # Уведомляем пользователя
+        # Уведомляем пользователя с ОБНОВЛЕННЫМ меню
         role_text = t(request_user.lang or "ru", f"role_{request.requested_role.value}")
         try:
+            # Отправляем уведомление
             await callback.bot.send_message(
                 chat_id=int(request_user.tg_id),
                 text=t(request_user.lang or "ru", "role_approved", role=role_text)
             )
-        except:
-            pass  # Пользователь заблокировал бота
+            
+            # ВАЖНО: Показываем новое меню с правами роли
+            from app.handlers.start import _show_main_menu_to_user
+            await _show_main_menu_to_user(
+                callback.bot, 
+                int(request_user.tg_id), 
+                request_user.lang or "ru", 
+                new_role.value
+            )
+            
+        except Exception as e:
+            print(f"Error sending approval notification: {e}")
         
-        # Обновляем сообщение
+        # Обновляем сообщение админа
         await callback.message.edit_text(
             callback.message.text + f"\n\n✅ Одобрено администратором {user.first_name}",
             reply_markup=None

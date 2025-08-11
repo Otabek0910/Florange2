@@ -41,6 +41,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     tg_id = Column(String(50), unique=True, nullable=False)
     first_name = Column(String(100))
+    last_name = Column(String(100))      # НОВОЕ ПОЛЕ
     phone = Column(String(20))
     lang = Column(String(5))
     role = Column(Enum(RoleEnum), default=RoleEnum.client)
@@ -138,3 +139,5 @@ class RoleRequest(Base):
     
     user = relationship("User", foreign_keys=[user_id])
     approver = relationship("User", foreign_keys=[approved_by])
+
+    
