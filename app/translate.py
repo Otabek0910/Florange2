@@ -1,50 +1,110 @@
-# /project/app/translate.py
+# -*- coding: utf-8 -*-
+from typing import Dict
 
-translate = {
-    "start_message": {
-        "ru": "Добро пожаловать в Florange 🌸\nВыберите язык:",
-        "uz": "Florange ga xush kelibsiz 🌸\nTilni tanlang:"
+TRANSLATIONS: Dict[str, Dict[str, str]] = {
+    # Общие
+    "start_choose_lang": {
+        "ru": "Выберите язык:",
+        "uz": "Tilni tanlang:"
     },
-    "menu_main": {
-        "ru": "Главное меню",
-        "uz": "Asosiy menyu"
+    "lang_saved_ru": {
+        "ru": "Язык сохранён: Русский 🇷🇺",
+        "uz": "Til saqlandi: Rus tili 🇷🇺"
     },
-    "menu_flowers": {
-        "ru": "Цветы",
-        "uz": "Gullar"
+    "lang_saved_uz": {
+        "ru": "Язык сохранён: Узбекский 🇺🇿",
+        "uz": "Til saqlandi: Oʻzbek tili 🇺🇿"
     },
-    "menu_bouquets": {
-        "ru": "Готовые композиции",
-        "uz": "Tayyor kompozitsiyalar"
+    "menu_title": {
+        "ru": "Выберите действие:",
+        "uz": "Amalni tanlang:"
     },
-    "menu_vip": {
-        "ru": "VIP",
-        "uz": "VIP"
+    "menu_catalog": {
+        "ru": "🛍 Каталог",
+        "uz": "🛍 Katalog"
     },
-    "menu_cards": {
-        "ru": "Открытки",
-        "uz": "Ochiqchalar"
+    "menu_cart": {
+        "ru": "🛒 Корзина",
+        "uz": "🛒 Savat"
     },
-    "menu_wrapping": {
-        "ru": "Упаковка",
-        "uz": "O‘rash"
+    "menu_orders": {
+        "ru": "📦 Мои заказы",
+        "uz": "📦 Buyurtmalarim"
     },
-    "menu_plants": {
-        "ru": "Комнатные растения",
-        "uz": "Xonaki o‘simliklar"
+
+    # Каталог
+    "no_categories": {
+        "ru": "Категорий пока нет.",
+        "uz": "Hozircha kategoriyalar yoʻq."
     },
-    "menu_toys_perfume": {
-        "ru": "Игрушки и духи",
-        "uz": "O‘yinchoqlar va atirlar"
+    "choose_category": {
+        "ru": "Выберите категорию:",
+        "uz": "Kategoriyani tanlang:"
     },
-    "back": {
-        "ru": "⬅️ Назад",
-        "uz": "⬅️ Orqaga"
-    }
+    "no_products": {
+        "ru": "В этой категории пока нет товаров.",
+        "uz": "Bu kategoriyada hozircha mahsulot yoʻq."
+    },
+    "add_to_cart": {
+        "ru": "Добавить в корзину 🛒",
+        "uz": "Savatga qoʻshish 🛒"
+    },
+    "product_card_caption": {
+        # {name} {desc} {price} {currency}
+        "ru": "<b>{name}</b>\n\n{desc}\nЦена: {price} {currency}",
+        "uz": "<b>{name}</b>\n\n{desc}\nNarxi: {price} {currency}"
+    },
+
+    # Корзина
+    "cart_empty": {
+        "ru": "Ваша корзина пуста.",
+        "uz": "Savat bo‘sh."
+    },
+    "cart_title": {
+        "ru": "🛒 Ваша корзина:",
+        "uz": "🛒 Savatingiz:"
+    },
+    "cart_clear": {
+        "ru": "❌ Очистить",
+        "uz": "❌ Tozalash"
+    },
+    "cart_checkout": {
+        "ru": "✅ Оформить заказ",
+        "uz": "✅ Buyurtma berish"
+    },
+    "cart_cleared": {
+        "ru": "Корзина очищена 🗑",
+        "uz": "Savat tozalandi 🗑"
+    },
+    "item_added": {
+        "ru": "Товар добавлен в корзину ✅",
+        "uz": "Mahsulot savatga qoʻshildi ✅"
+    },
+    "total_line": {
+        # {total} {currency}
+        "ru": "\n<b>Итого:</b> {total} {currency}",
+        "uz": "\n<b>Jami:</b> {total} {currency}"
+    },
+
+    # Валюта
+    "currency": {
+        "ru": "сум",
+        "uz": "soʻm"
+    },
 }
 
-def t(key: str, lang: str) -> str:
-    """Возвращает перевод по ключу и языку"""
-    if key not in translate:
-        return key  # если ключ не найден, возвращаем сам ключ
-    return translate[key].get(lang, translate[key].get("ru", key))
+def t(lang: str, key: str, **kwargs) -> str:
+    """
+    Безопасный доступ к переводу.
+    - lang: 'ru' | 'uz' (иначе fallback на 'ru')
+    - key: ключ из TRANSLATIONS
+    - kwargs: подстановки в шаблон (format)
+    """
+    lang = lang if lang in ("ru", "uz") else "ru"
+    entry = TRANSLATIONS.get(key, {})
+    template = entry.get(lang) or entry.get("ru") or key
+    try:
+        return template.format(**kwargs)
+    except Exception:
+        # если не хватает плейсхолдеров — вернём как есть
+        return template
