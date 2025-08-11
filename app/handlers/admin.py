@@ -145,9 +145,22 @@ async def show_pending_requests(callback: types.CallbackQuery):
             role_text = t(lang, f"role_{req.requested_role.value}")
             date_str = req.created_at.strftime("%d.%m.%Y %H:%M") if req.created_at else ""
             
+            # Формируем полное имя
+            full_name = ""
+            if request_user:
+                if request_user.first_name:
+                    full_name += request_user.first_name
+                if request_user.last_name:
+                    full_name += f" {request_user.last_name}"
+                if not full_name:
+                    full_name = "Без имени"
+            else:
+                full_name = "Пользователь не найден"
+            
             lines.append(
                 f"🆔 #{req.id} | {role_text}\n"
-                f"👤 {request_user.first_name if request_user else 'N/A'}\n"
+                f"👤 {full_name}\n"
+                f"📞 {request_user.phone if request_user and request_user.phone else 'Не указан'}\n"
                 f"💬 {req.reason[:50]}{'...' if len(req.reason) > 50 else ''}\n"
                 f"📅 {date_str}\n"
             )
@@ -158,10 +171,23 @@ async def show_pending_requests(callback: types.CallbackQuery):
         buttons = []
         for req in requests[:3]:  # Первые 3 заявки
             request_user = await user_service.user_repo.get(req.user_id)
+            
+            # Формируем отображаемое имя для кнопки
+            display_name = ""
+            if request_user:
+                if request_user.first_name:
+                    display_name = request_user.first_name
+                    if request_user.last_name:
+                        display_name += f" {request_user.last_name[:1]}."  # Только первая буква фамилии
+                else:
+                    display_name = "Без имени"
+            else:
+                display_name = "N/A"
+            
             role_emoji = "🌸" if req.requested_role == RequestedRoleEnum.florist else "👑"
             buttons.append([
                 types.InlineKeyboardButton(
-                    text=f"{role_emoji} {request_user.first_name if request_user else 'N/A'} #{req.id}",
+                    text=f"{role_emoji} {display_name} #{req.id}",
                     callback_data=f"view_req_{req.id}"
                 )
             ])
@@ -203,9 +229,22 @@ async def view_request_details(callback: types.CallbackQuery):
         role_text = t(lang, f"role_{request.requested_role.value}")
         date_str = request.created_at.strftime("%d.%m.%Y %H:%M") if request.created_at else ""
         
+        # Формируем полное имя
+        full_name = "Не указано"
+        if request_user:
+            parts = []
+            if request_user.first_name:
+                parts.append(request_user.first_name)
+            if request_user.last_name:
+                parts.append(request_user.last_name)
+            if parts:
+                full_name = " ".join(parts)
+        
         text = (
             f"📋 Заявка #{request.id}\n\n"
-            f"👤 {request_user.first_name if request_user else 'N/A'} (ID: {request_user.tg_id if request_user else 'N/A'})\n"
+            f"👤 {full_name}\n"
+            f"📞 {request_user.phone if request_user and request_user.phone else 'Не указан'}\n"
+            f"🆔 Telegram ID: {request_user.tg_id if request_user else 'N/A'}\n"
             f"🎯 Роль: {role_text}\n"
             f"💬 Причина: {request.reason}\n"
             f"📅 Дата: {date_str}"
@@ -224,7 +263,6 @@ async def view_request_details(callback: types.CallbackQuery):
         
         await callback.message.edit_text(text, reply_markup=kb)
         await callback.answer()
-
 @router.callback_query(F.data.startswith("approve_req_"))
 async def approve_request(callback: types.CallbackQuery):
     """Одобрить заявку на роль"""

@@ -171,13 +171,18 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
     
     await state.update_data(phone=phone)
     
-    # Убираем клавиатуру
-    success_msg = await message.answer("✅", reply_markup=types.ReplyKeyboardRemove())
+    # Убираем клавиатуру БЕЗ сообщения
+    try:
+        await message.answer("...", reply_markup=types.ReplyKeyboardRemove())
+        # Удаляем это служебное сообщение сразу
+        await message.bot.delete_message(message.chat.id, message.message_id + 1)
+    except:
+        pass
     
     if role == "client":
         # Создаем клиента сразу
         if user_service and session:
-            # Разделяем имя на first_name и last_name если возможно
+            # Разделяем имя на first_name и last_name
             name_parts = full_name.split(maxsplit=1)
             first_name = name_parts[0] if name_parts else ""
             last_name = name_parts[1] if len(name_parts) > 1 else ""
@@ -185,7 +190,7 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
             new_user = User(
                 tg_id=data["tg_id"],
                 first_name=first_name,
-                last_name=last_name,  # Нужно добавить в модель
+                last_name=last_name,
                 phone=phone,
                 lang=lang,
                 role=RoleEnum.client
@@ -194,18 +199,29 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
             await user_service.user_repo.create(new_user)
             await session.commit()
         
-        # Удаляем сообщение с галочкой
-        await success_msg.delete()
+        # АГРЕССИВНАЯ ОЧИСТКА: удаляем все сообщения регистрации
+        try:
+            for i in range(10):  # Удаляем последние 10 сообщений
+                await message.bot.delete_message(message.chat.id, message.message_id - i)
+        except:
+            pass
         
+        # Отправляем финальное сообщение и меню
         welcome_msg = await message.answer(t(lang, "registration_complete"))
         await _show_main_menu(message, lang, "client")
+        
+        # Удаляем welcome сообщение через 3 секунды
+        import asyncio
+        asyncio.create_task(_delete_message_later(message.bot, message.chat.id, welcome_msg.message_id, 3))
+        
         await state.clear()
         
     else:
         # Для флористов/владельцев запрашиваем причину
-        await success_msg.delete()
         await state.set_state(Registration.REQUEST_REASON)
-        await message.answer(t(lang, "ask_role_reason"))
+        reason_msg = await message.answer(t(lang, "ask_role_reason"))
+        # Сохраняем ID сообщения для удаления
+        await state.update_data(reason_msg_id=reason_msg.message_id)
 
 @router.message(Registration.REQUEST_REASON)
 async def process_reason(message: types.Message, state: FSMContext, user_service=None, session=None):
@@ -223,6 +239,14 @@ async def process_reason(message: types.Message, state: FSMContext, user_service
     
     # Удаляем сообщение пользователя
     await message.delete()
+    
+    # Удаляем сообщение с вопросом о причине
+    try:
+        reason_msg_id = data.get("reason_msg_id")
+        if reason_msg_id:
+            await message.bot.delete_message(message.chat.id, reason_msg_id)
+    except:
+        pass
     
     # Разделяем имя
     name_parts = full_name.split(maxsplit=1)
@@ -258,8 +282,31 @@ async def process_reason(message: types.Message, state: FSMContext, user_service
         await notification_service.notify_admins_about_role_request(admins, request)
     
     await session.commit()
-    await message.answer(t(lang, "role_request_sent"))
+    
+    # АГРЕССИВНАЯ ОЧИСТКА всех сообщений регистрации
+    try:
+        for i in range(15):  # Удаляем последние 15 сообщений
+            await message.bot.delete_message(message.chat.id, message.message_id - i)
+    except:
+        pass
+    
+    # Отправляем финальное сообщение
+    final_msg = await message.answer(t(lang, "role_request_sent"))
+    
+    # Удаляем финальное сообщение через 5 секунд
+    import asyncio
+    asyncio.create_task(_delete_message_later(message.bot, message.chat.id, final_msg.message_id, 5))
+    
     await state.clear()
+
+async def _delete_message_later(bot, chat_id: int, message_id: int, delay: int):
+    """Удалить сообщение через delay секунд"""
+    import asyncio
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except:
+        pass
 
 # Вспомогательные функции
 async def _show_main_menu(message: types.Message, lang: str, role: str = "client"):
