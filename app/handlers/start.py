@@ -5,21 +5,17 @@ from aiogram.fsm.context import FSMContext
 
 from app.repositories import SettingsRepository
 from app.services import NotificationService
-from app.models import (
-    RequestedRoleEnum, 
-    RoleRequest, 
-    RoleEnum, 
-    User  # ВАЖНО: должен быть импортирован
-)
+from app.models import RequestedRoleEnum, RoleRequest, RoleEnum, User
 from app.translate import t
 from app.utils.validators import validate_phone
 
 router = Router()
-# FSM состояния для регистрации
+
+# FSM состояния для регистрации (БЕЗ REQUEST_REASON)
 class Registration(StatesGroup):
     CHOOSE_LANG = State()
     CHOOSE_ROLE = State()
-    ASK_NAME = State()         # НОВОЕ состояние
+    ASK_NAME = State()
     ASK_PHONE = State()
 
 @router.message(Command("start"))
@@ -138,7 +134,7 @@ async def process_contact_phone(message: types.Message, state: FSMContext, user_
 async def process_manual_phone(message: types.Message, state: FSMContext, user_service=None, session=None):
     """Обработка ручного ввода телефона"""
     # Пропускаем кнопку "Ввести вручную"
-    if message.text == t("ru", "enter_manually_button") or message.text == t("uz", "enter_manually_button"):
+    if message.text in [t("ru", "enter_manually_button"), t("uz", "enter_manually_button")]:
         data = await state.get_data()
         lang = data.get("lang", "ru")
         
@@ -176,8 +172,8 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
     
     # Убираем клавиатуру
     try:
-        await message.answer("...", reply_markup=types.ReplyKeyboardRemove())
-        await message.bot.delete_message(message.chat.id, message.message_id + 1)
+        temp_msg = await message.answer("...", reply_markup=types.ReplyKeyboardRemove())
+        await temp_msg.delete()
     except:
         pass
     
@@ -236,7 +232,7 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
         request = RoleRequest(
             user_tg_id=data["tg_id"],
             requested_role=role_enum,
-            reason="Автоматическая заявка",  # Стандартная причина
+            reason="Автоматическая заявка",
             user_data=str(user_data)
         )
         session.add(request)
@@ -262,74 +258,6 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
         
         await state.clear()
 
-@router.message(Registration.REQUEST_REASON)
-async def process_reason(message: types.Message, state: FSMContext, user_service=None, session=None):
-    """Обработка причины для заявки на роль"""
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-    role = data.get("role")
-    reason = message.text.strip()
-    full_name = data.get("full_name", data.get("first_name", ""))
-    
-    if not session:
-        await message.answer("Ошибка: сессия не найдена")
-        await state.clear()
-        return
-    
-    # Удаляем сообщение пользователя
-    try:
-        await message.delete()
-    except:
-        pass
-    
-    # Разделяем имя
-    name_parts = full_name.split(maxsplit=1)
-    first_name = name_parts[0] if name_parts else ""
-    last_name = name_parts[1] if len(name_parts) > 1 else ""
-    
-    # ВАЖНО: НЕ создаем пользователя сразу!
-    # Сохраняем данные для создания после одобрения
-    user_data = {
-        "tg_id": data["tg_id"],
-        "first_name": first_name,
-        "last_name": last_name,
-        "phone": data["phone"],
-        "lang": lang,
-        "requested_role": role
-    }
-    
-    # Создаем заявку БЕЗ создания пользователя
-    role_enum = RequestedRoleEnum.florist if role == "florist" else RequestedRoleEnum.owner
-    request = RoleRequest(
-        user_id=None,  # Пока нет пользователя
-        user_tg_id=data["tg_id"],  # Добавим это поле в модель
-        requested_role=role_enum,
-        reason=reason,
-        user_data=str(user_data)  # Сохраняем данные как JSON строку
-    )
-    session.add(request)
-    await session.flush()
-    
-    # Уведомляем админов
-    if user_service:
-        notification_service = NotificationService(message.bot)
-        admins = await user_service.get_admins()
-        await notification_service.notify_admins_about_role_request(admins, request)
-    
-    await session.commit()
-    
-    # Очищаем чат
-    await _aggressive_chat_cleanup(message, 15)
-    
-    # Финальное сообщение
-    final_msg = await message.answer(t(lang, "role_request_sent"))
-    
-    # Удаляем финальное сообщение через 5 секунд
-    import asyncio
-    asyncio.create_task(_delete_message_later(message.bot, message.chat.id, final_msg.message_id, 5))
-    
-    await state.clear()
-
 async def _aggressive_chat_cleanup(message, count: int = 20):
     """Агрессивная очистка чата"""
     try:
@@ -350,6 +278,7 @@ async def _delete_message_later(bot, chat_id: int, message_id: int, delay: int):
         await bot.delete_message(chat_id, message_id)
     except:
         pass
+
 # Вспомогательные функции
 async def _show_main_menu(message: types.Message, lang: str, role: str = "client"):
     """Показать главное меню"""
@@ -394,7 +323,6 @@ async def _get_pending_requests_count(bot) -> int:
         from app.models import RoleRequest, RequestStatusEnum
         
         async for session in get_session():
-            user_service = UserService(session)
             result = await session.execute(
                 select(func.count(RoleRequest.id))
                 .where(RoleRequest.status == RequestStatusEnum.pending)
