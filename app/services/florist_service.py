@@ -34,7 +34,7 @@ class FloristService:
                 'user': florist.user,
                 'is_online': is_online,
                 'status_text': status_text,
-                'rating_text': f"⭐{florist.rating:.1f}" if florist.reviews_count > 0 else "⭐новый"
+                'rating_text': f"⭐{florist.rating:.1f}" if florist.reviews_count > 0 else "⭐нов."
             })
         
         return result

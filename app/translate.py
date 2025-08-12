@@ -570,6 +570,35 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
     "uz": "🌸 Florist konsultatsiyasi"
     },
 
+      "consultation_message_from_florist": {
+        "ru": "🌸 Ответ флориста:",
+        "uz": "🌸 Florist javobi:"
+    },
+    "consultation_header": {
+        "ru": "🌸 Консультация с флористом {name}\n⏰ Начата: {time}\n\n💡 Для завершения нажмите на это сообщение",
+        "uz": "🌸 {name} florist bilan konsultatsiya\n⏰ Boshlangan: {time}\n\n💡 Tugatish uchun bu xabarga bosing"
+    },
+    "call_florist": {
+        "ru": "📞 Позвонить",
+        "uz": "📞 Qo'ng'iroq"
+    },
+    "call_request_sent": {
+        "ru": "📞 Запрос на звонок отправлен флористу",
+        "uz": "📞 Qo'ng'iroq so'rovi floristga yuborildi"
+    },
+    "call_request_received": {
+        "ru": "📞 Клиент {name} хочет поговорить по телефону\n📱 Номер: {phone}",
+        "uz": "📞 {name} mijoz telefon orqali gaplashmoqchi\n📱 Raqam: {phone}"
+    },
+    "history_consultations": {
+        "ru": "📚 История консультаций",
+        "uz": "📚 Konsultatsiyalar tarixi"
+    },
+    "no_consultation_history": {
+        "ru": "У вас пока нет истории консультаций",
+        "uz": "Sizda hali konsultatsiya tarixi yo'q"
+    },
+
 }
 
 def t(lang: str, key: str, **kwargs) -> str:
