@@ -303,21 +303,27 @@ async def approve_request(callback: types.CallbackQuery):
         target_role = RoleEnum.florist if request.requested_role == RequestedRoleEnum.florist else RoleEnum.owner
         
         new_user = User(
-            tg_id=user_data["tg_id"],
-            first_name=user_data["first_name"],
-            last_name=user_data["last_name"],
-            phone=user_data["phone"],
-            lang=user_data["lang"],
-            role=target_role  # Сразу нужная роль!
+            tg_id=request.user_tg_id,  # 🆕 ИСПОЛЬЗУЕМ user_tg_id
+            first_name=request.first_name,  # 🆕 СТРУКТУРИРОВАННЫЕ ПОЛЯ
+            last_name=request.last_name,
+            phone=request.phone,
+            lang=request.lang,
+            role=target_role
         )
         
         await user_service.user_repo.create(new_user)
         await session.flush()
+
+        # 🆕 АВТОМАТИЧЕСКИ СОЗДАЕМ ПРОФИЛЬ ФЛОРИСТА
+        if target_role == RoleEnum.florist:
+            from app.services import FloristService
+            florist_service = FloristService(session)
+            await florist_service.get_or_create_profile(new_user.id)
         
         # Обновляем заявку
         request.status = RequestStatusEnum.approved
         request.approved_by = user.id
-        request.user_id = new_user.id  # Связываем с созданным пользователем
+        request.user_id = new_user.id
         
         await session.commit()
         

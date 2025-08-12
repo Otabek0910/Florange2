@@ -47,7 +47,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     tg_id = Column(String(50), unique=True, nullable=False)
     first_name = Column(String(100))
-    last_name = Column(String(100))      # НОВОЕ ПОЛЕ
+    last_name = Column(String(100))
     phone = Column(String(20))
     lang = Column(String(5))
     role = Column(Enum(RoleEnum), default=RoleEnum.client)
@@ -94,6 +94,7 @@ class Order(Base):
     __tablename__ = "orders"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    florist_id = Column(Integer, ForeignKey("users.id"))  # 🆕 КТО ПРИНЯЛ ЗАКАЗ
     total_price = Column(Numeric(10, 2), nullable=False, default=0)
     status = Column(Enum(OrderStatusEnum), default=OrderStatusEnum.new)
     address = Column(Text)
@@ -101,7 +102,8 @@ class Order(Base):
     slot_at = Column(DateTime)
     comment = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
-    user = relationship("User")
+    user = relationship("User", foreign_keys=[user_id])
+    florist = relationship("User", foreign_keys=[florist_id])  # 🆕
     items = relationship("OrderItem", back_populates="order")
 
 class OrderItem(Base):
@@ -136,16 +138,24 @@ class RoleRequest(Base):
     __tablename__ = "role_requests"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    user_tg_id = Column(String(50), nullable=True)
+    user_tg_id = Column(String(50), nullable=False)  # 🆕 ОСНОВНОЙ КЛЮЧ
     requested_role = Column(Enum(RequestedRoleEnum), nullable=False)
     status = Column(Enum(RequestStatusEnum), default=RequestStatusEnum.pending)
-    reason = Column(Text, default="Автоматическая заявка")  # Дефолтное значение
-    user_data = Column(Text)
+    reason = Column(Text, default="Автоматическая заявка")
+    
+    # 🆕 СТРУКТУРИРОВАННЫЕ ПОЛЯ (вместо user_data)
+    first_name = Column(String(100))
+    last_name = Column(String(100))  
+    phone = Column(String(20))
+    lang = Column(String(5))
+    
     approved_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     approver = relationship("User", foreign_keys=[approved_by])
+
+# ========== КОНСУЛЬТАЦИИ (ОСТАВЛЯЕМ КАК ЕСТЬ) ==========
 
 class FloristProfile(Base):
     __tablename__ = "florist_profiles"
@@ -170,6 +180,8 @@ class Consultation(Base):
     status = Column(Enum(ConsultationStatusEnum), default=ConsultationStatusEnum.active)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)
+    theme = Column(String(255))  # ИИ-генерируемая тема
+    archive_id = Column(String(100))  # ID архива в канале
     created_at = Column(DateTime, default=datetime.utcnow)
     
     client = relationship("User", foreign_keys=[client_id])
@@ -200,4 +212,3 @@ class FloristReview(Base):
     consultation = relationship("Consultation")
     client = relationship("User", foreign_keys=[client_id])
     florist = relationship("User", foreign_keys=[florist_id])
-    

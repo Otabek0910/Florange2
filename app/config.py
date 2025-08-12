@@ -21,6 +21,11 @@ class Settings:
     
     # Notifications
     FLORIST_CHANNEL_ID: Optional[str] = os.getenv("FLORIST_CHANNEL_ID")
+
+    # Archive & AI
+    ARCHIVE_CHANNEL_ID: Optional[str] = os.getenv("ARCHIVE_CHANNEL_ID")
+    YANDEX_GPT_API_KEY: Optional[str] = os.getenv("YANDEX_GPT_API_KEY")
+    YANDEX_FOLDER_ID: Optional[str] = os.getenv("YANDEX_FOLDER_ID")
     
     # Payment
     CLICK_MERCHANT_ID: Optional[str] = os.getenv("CLICK_MERCHANT_ID")

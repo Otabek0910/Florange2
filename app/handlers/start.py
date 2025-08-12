@@ -168,15 +168,6 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
     role = data.get("role", "client")
     full_name = data.get("full_name", data.get("first_name", ""))
     
-    await state.update_data(phone=phone)
-    
-    # Убираем клавиатуру
-    try:
-        temp_msg = await message.answer("...", reply_markup=types.ReplyKeyboardRemove())
-        await temp_msg.delete()
-    except:
-        pass
-    
     # Разделяем имя
     name_parts = full_name.split(maxsplit=1)
     first_name = name_parts[0] if name_parts else ""
@@ -217,23 +208,16 @@ async def _complete_phone_registration(message: types.Message, state: FSMContext
             await state.clear()
             return
         
-        # Сохраняем данные для создания после одобрения
-        user_data = {
-            "tg_id": data["tg_id"],
-            "first_name": first_name,
-            "last_name": last_name,
-            "phone": phone,
-            "lang": lang,
-            "requested_role": role
-        }
-        
-        # Создаем заявку БЕЗ причины
+        # 🆕 СТРУКТУРИРОВАННЫЕ ПОЛЯ вместо user_data
         role_enum = RequestedRoleEnum.florist if role == "florist" else RequestedRoleEnum.owner
         request = RoleRequest(
             user_tg_id=data["tg_id"],
             requested_role=role_enum,
             reason="Автоматическая заявка",
-            user_data=str(user_data)
+            first_name=first_name,  # 🆕
+            last_name=last_name,    # 🆕
+            phone=phone,            # 🆕
+            lang=lang               # 🆕
         )
         session.add(request)
         await session.flush()
