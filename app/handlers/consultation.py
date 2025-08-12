@@ -1,10 +1,12 @@
+
 from aiogram import Router, types, F
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from sqlalchemy import select
 
 from app.database import get_session
 from app.services import UserService, FloristService, ConsultationService
-from app.models import RoleEnum, ConsultationStatusEnum
+from app.models import RoleEnum, ConsultationStatusEnum, Consultation, ConsultationMessage
 from app.translate import t
 from app.exceptions import ValidationError, UserNotFoundError
 

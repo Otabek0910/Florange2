@@ -294,9 +294,10 @@ async def _create_main_menu_keyboard(bot, lang: str, role: str) -> types.InlineK
         [types.InlineKeyboardButton(text=t(lang, "menu_cart"), callback_data="open_cart")]
     ]
     
-    # 🆕 Добавляем консультацию ТОЛЬКО для клиентов
+# 🆕 Добавляем консультацию ТОЛЬКО для клиентов
     if role == "client":
         kb_rows.append([types.InlineKeyboardButton(text=t(lang, "menu_consultation"), callback_data="consultation_start")])
+        kb_rows.append([types.InlineKeyboardButton(text=t(lang, "history_consultations"), callback_data="consultation_history")])
     
     # Мои заказы для всех
     kb_rows.append([types.InlineKeyboardButton(text=t(lang, "menu_orders"), callback_data="my_orders")])
