@@ -13,6 +13,11 @@ from app.models import (
 from app.translate import t
 from app.exceptions import UserNotFoundError
 
+import logging
+from datetime import datetime
+from app.translate import t
+from app.models import User, RoleEnum, RequestedRoleEnum
+
 router = Router()
 
 async def _get_user_and_check_admin(session, tg_id: int):
@@ -280,7 +285,6 @@ async def approve_request(callback: types.CallbackQuery):
             return
         
         lang = user.lang or "ru"
-        user_service = UserService(session)
         
         # Получаем заявку
         from sqlalchemy import select
@@ -291,68 +295,57 @@ async def approve_request(callback: types.CallbackQuery):
             await callback.answer(t(lang, "request_not_found"), show_alert=True)
             return
         
-        # Парсим данные пользователя
-        import json
-        try:
-            user_data = eval(request.user_data)  # Простой парсинг
-        except:
-            await callback.answer("Ошибка данных заявки", show_alert=True)
-            return
+        # ✅ БЕЗОПАСНО: используем структурированные поля
+        user_data = {
+            "tg_id": request.user_tg_id,
+            "first_name": request.first_name,
+            "last_name": request.last_name,
+            "phone": request.phone,
+            "lang": request.lang or "ru"
+        }
         
         # Создаем пользователя с нужной ролью
         target_role = RoleEnum.florist if request.requested_role == RequestedRoleEnum.florist else RoleEnum.owner
         
-        new_user = User(
-            tg_id=request.user_tg_id,  # 🆕 ИСПОЛЬЗУЕМ user_tg_id
-            first_name=request.first_name,  # 🆕 СТРУКТУРИРОВАННЫЕ ПОЛЯ
-            last_name=request.last_name,
-            phone=request.phone,
-            lang=request.lang,
-            role=target_role
-        )
-        
-        await user_service.user_repo.create(new_user)
-        await session.flush()
-
-        # 🆕 АВТОМАТИЧЕСКИ СОЗДАЕМ ПРОФИЛЬ ФЛОРИСТА
-        if target_role == RoleEnum.florist:
-            from app.services import FloristService
-            florist_service = FloristService(session)
-            await florist_service.get_or_create_profile(new_user.id)
-        
-        # Обновляем заявку
-        request.status = RequestStatusEnum.approved
-        request.approved_by = user.id
-        request.user_id = new_user.id
-        
-        await session.commit()
-        
-        # Уведомляем пользователя
-        role_text = t(user_data["lang"], f"role_{request.requested_role.value}")
         try:
+            new_user = User(
+                tg_id=request.user_tg_id,
+                first_name=request.first_name,
+                last_name=request.last_name,
+                phone=request.phone,
+                lang=request.lang,
+                role=target_role
+            )
+            
+            from app.repositories import UserRepository
+            user_repo = UserRepository(session)
+            created_user = await user_repo.create(new_user)
+            
+            # Автоматически создаем профиль флориста
+            if target_role == RoleEnum.florist:
+                from app.services import FloristService
+                florist_service = FloristService(session)
+                await florist_service.get_or_create_profile(created_user.id)
+            
+            # Обновляем заявку
+            request.status = RequestStatusEnum.approved
+            request.approved_by = user.id
+            request.user_id = created_user.id
+            
+            await session.commit()
+            
+            # Уведомляем пользователя
+            role_text = t(user_data["lang"], f"role_{request.requested_role.value}")
             await callback.bot.send_message(
                 chat_id=int(user_data["tg_id"]),
                 text=t(user_data["lang"], "role_approved", role=role_text)
             )
             
-            # Показываем меню с нужными правами
-            from app.handlers.start import _show_main_menu_to_user
-            await _show_main_menu_to_user(
-                callback.bot, 
-                int(user_data["tg_id"]), 
-                user_data["lang"], 
-                target_role.value
-            )
-            
         except Exception as e:
-            print(f"Error sending approval notification: {e}")
-        
-        await callback.message.edit_text(
-            callback.message.text + f"\n\n✅ Одобрено администратором {user.first_name}",
-            reply_markup=None
-        )
-        
-        await callback.answer(t(lang, "request_approved"))
+            await session.rollback()
+            logging.error(f"Error approving request: {e}")
+            await callback.answer("Ошибка при одобрении заявки", show_alert=True)
+            return
 
 @router.callback_query(F.data.startswith("reject_req_"))
 async def reject_request(callback: types.CallbackQuery):

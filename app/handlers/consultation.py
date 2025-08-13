@@ -9,6 +9,8 @@ from app.services import UserService, FloristService, ConsultationService
 from app.models import RoleEnum, ConsultationStatusEnum, Consultation, ConsultationMessage
 from app.translate import t
 from app.exceptions import ValidationError, UserNotFoundError
+import logging
+from datetime import datetime
 
 router = Router()
 
@@ -254,73 +256,86 @@ async def handle_consultation_message(message: types.Message, state: FSMContext)
 
 @router.callback_query(F.data.startswith("end_consultation_"))
 async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
-    """Завершение консультации"""
+    """Завершение консультации с полной очисткой"""
     consultation_id = int(callback.data.split("_")[2])
     
-    async for session in get_session():
-        user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        consultation_service = ConsultationService(session)
+    from app.database.uow import get_uow
+    
+    async with get_uow() as uow:
+        user, lang = await _get_user_and_lang(uow.session, callback.from_user.id)
         
         try:
-            consultation = await consultation_service.complete_consultation(consultation_id, user.id)
-            await session.commit()
+            # Получаем консультацию
+            consultation = await uow.consultations.get(consultation_id)
+            if not consultation:
+                await callback.answer("Консультация не найдена", show_alert=True)
+                return
             
-            if consultation:
-                # Генерируем тему и архивируем
+            # Завершаем консультацию
+            consultation.status = ConsultationStatusEnum.completed_by_client \
+                if user.id == consultation.client_id \
+                else ConsultationStatusEnum.completed_by_florist
+            consultation.completed_at = datetime.utcnow()
+            
+            # Архивируем если есть сообщения
+            messages = await uow.consultations.get_messages(consultation_id)
+            if messages:
                 from app.services.ai_archive_service import AIArchiveService
                 ai_service = AIArchiveService(callback.bot)
                 
-                # Получаем все сообщения консультации для архива
-                messages = await consultation_service.consultation_repo.session.execute(
-                    select(ConsultationMessage)
-                    .where(ConsultationMessage.consultation_id == consultation_id)
-                    .order_by(ConsultationMessage.sent_at)
-                )
-                all_messages = messages.scalars().all()
+                # Генерируем тему
+                theme = await ai_service.generate_consultation_theme(messages)
+                consultation.theme = theme
                 
-                # Генерируем тему через ИИ
-                if all_messages:
-                    theme = await ai_service.generate_consultation_theme(all_messages)
-                    consultation.theme = theme
-                
-                # Архивируем в канал
-                archive_id = await ai_service.archive_consultation(consultation, all_messages)
-                if archive_id:
-                    consultation.archive_id = archive_id
-                
-                await session.commit()
-                
-                # ПОЛНАЯ ОЧИСТКА ЧАТА
-                await _clear_consultation_chat(callback.bot, callback.message.chat.id, state)
-                
-                # Очищаем состояние
-                await state.clear()
-                
-                # Предлагаем оценить флориста (только клиентам)
-                if user.role == RoleEnum.client:
-                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(text=f"⭐ 1", callback_data=f"rate_{consultation_id}_1")],
-                        [types.InlineKeyboardButton(text=f"⭐ 2", callback_data=f"rate_{consultation_id}_2")],
-                        [types.InlineKeyboardButton(text=f"⭐ 3", callback_data=f"rate_{consultation_id}_3")],
-                        [types.InlineKeyboardButton(text=f"⭐ 4", callback_data=f"rate_{consultation_id}_4")],
-                        [types.InlineKeyboardButton(text=f"⭐ 5", callback_data=f"rate_{consultation_id}_5")],
-                        [types.InlineKeyboardButton(text=t(lang, "back_to_menu"), callback_data="main_menu")]
-                    ])
-                    await callback.bot.send_message(
-                        callback.message.chat.id,
-                        t(lang, "rate_florist_prompt"), 
-                        reply_markup=kb
-                    )
-                else:
-                    # Для флориста сразу показываем меню
-                    from app.handlers.start import _show_main_menu
-                    await _show_main_menu_after_cleanup(callback.bot, callback.message.chat.id, lang, user.role.value)
-                
-                # Уведомляем другого участника
-                await _notify_consultation_ended(callback.bot, consultation, user.id, session)
+                # Архивируем
+                archive_id = await ai_service.archive_consultation(consultation, messages)
+                consultation.archive_id = archive_id
             
-        except ValidationError as e:
-            await callback.answer(str(e), show_alert=True)
+            # ВАЖНО: Очищаем состояние FSM для ОБОИХ участников
+            await state.clear()
+            
+            # Очищаем состояние второго участника
+            other_user_id = consultation.florist_id if user.id == consultation.client_id else consultation.client_id
+            other_user = await uow.users.get(other_user_id)
+            if other_user:
+                # Создаем storage key для другого пользователя
+                from aiogram.fsm.storage.base import StorageKey
+                other_key = StorageKey(
+                    bot_id=callback.bot.id,
+                    chat_id=int(other_user.tg_id),
+                    user_id=int(other_user.tg_id)
+                )
+                await state.storage.set_state(other_key, None)
+                await state.storage.set_data(other_key, {})
+            
+            # Уведомляем другого участника
+            if other_user:
+                await callback.bot.send_message(
+                    int(other_user.tg_id),
+                    "Консультация завершена собеседником."
+                )
+            
+            # Предлагаем оценить (только клиенту)
+            if user.role == RoleEnum.client:
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text=f"⭐ {i}", callback_data=f"rate_{consultation_id}_{i}") 
+                     for i in range(1, 6)],
+                    [types.InlineKeyboardButton(text=t(lang, "back_to_menu"), callback_data="main_menu")]
+                ])
+                await callback.message.answer(t(lang, "rate_florist_prompt"), reply_markup=kb)
+            else:
+                await callback.message.answer("Консультация завершена.")
+            
+            # Удаляем сообщения консультации
+            await _clear_consultation_chat(
+                callback.bot, 
+                callback.message.chat.id,
+                state
+            )
+            
+        except Exception as e:
+            logging.error(f"Error ending consultation: {e}")
+            await callback.answer("Ошибка при завершении консультации", show_alert=True)
 
 @router.callback_query(F.data == "consultation_history")
 async def show_consultation_history(callback: types.CallbackQuery):
