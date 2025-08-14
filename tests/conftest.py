@@ -3,7 +3,7 @@ import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from app.models import Base
-from app.database import get_session
+from app.database.database import get_session
 
 @pytest.fixture
 async def test_db():

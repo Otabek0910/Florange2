@@ -312,7 +312,7 @@ async def _create_main_menu_keyboard(bot, lang: str, role: str) -> types.InlineK
 async def _get_pending_requests_count(bot) -> int:
     """Получить количество ожидающих заявок"""
     try:
-        from app.database import get_session
+        from app.database.database import get_session
         from app.services import UserService
         from sqlalchemy import select, func
         from app.models import RoleRequest, RequestStatusEnum

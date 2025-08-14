@@ -1,6 +1,6 @@
 # add_settings.py - добавить дефолтные настройки
 import asyncio
-from app.database import get_session
+from app.database.database import get_session
 from app.models import Settings
 
 async def add_default_settings():

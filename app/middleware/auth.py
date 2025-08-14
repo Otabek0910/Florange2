@@ -2,7 +2,7 @@ from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware
 from aiogram.types import Update, User as TgUser
 
-from app.database import get_session
+from app.database.database import get_session
 from app.services.user_service import UserService
 
 class AuthMiddleware(BaseMiddleware):

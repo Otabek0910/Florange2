@@ -8,7 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.handlers import start, catalog, cart, checkout, admin, orders, consultation
 from app.middleware.auth import AuthMiddleware
-from app.database import init_db
+from app.database.database import init_db
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)

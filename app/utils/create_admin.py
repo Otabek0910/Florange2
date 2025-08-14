@@ -1,7 +1,7 @@
 import asyncio
 import sys
 from sqlalchemy import select, update
-from app.database import get_session
+from app.database.database import get_session
 from app.models import User, RoleEnum
 
 async def create_super_admin():

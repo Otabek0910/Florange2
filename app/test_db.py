@@ -1,6 +1,6 @@
 # test_db.py - тест БД и моделей
 import asyncio
-from app.database import init_db, get_session
+from app.database.database import init_db, get_session
 from app.models import User, RoleEnum, Settings
 
 async def test_database():

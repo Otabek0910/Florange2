@@ -2,7 +2,7 @@ import asyncio
 import os
 from sqlalchemy import text
 from dotenv import load_dotenv
-from app.database import engine
+from app.database.database import engine
 
 load_dotenv()
 

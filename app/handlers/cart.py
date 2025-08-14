@@ -1,7 +1,7 @@
 from aiogram import Router, types, F
 from decimal import Decimal
 
-from app.database import get_session
+from app.database.database import get_session
 from app.services import UserService, CatalogService
 from app.utils.cart import add_to_cart, get_cart, clear_cart
 from app.translate import t

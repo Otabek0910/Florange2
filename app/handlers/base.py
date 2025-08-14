@@ -2,7 +2,7 @@ from typing import Optional, Tuple
 from aiogram import types
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_session
+from app.database.database import get_session
 from app.services import UserService
 from app.models import User
 from app.exceptions import UserNotFoundError

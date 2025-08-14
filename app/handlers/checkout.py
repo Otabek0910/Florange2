@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from decimal import Decimal
 from datetime import datetime
 
-from app.database import get_session
+from app.database.database import get_session
 from app.services import UserService, CatalogService, OrderService, NotificationService
 from app.schemas.order import OrderCreate
 from app.utils.cart import get_cart, clear_cart
