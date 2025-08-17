@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories import ConsultationRepository, FloristRepository
 from app.models import Consultation, ConsultationMessage, ConsultationStatusEnum
 from app.exceptions import ValidationError, UserNotFoundError
-from app.services.consultation_buffer import ConsultationBuffer
+from app.services.consultation_buffer import ConsultationBufferService
 
 class ConsultationService:
     """Сервис для работы с консультациями"""
@@ -15,7 +15,7 @@ class ConsultationService:
         self.session = session
         self.consultation_repo = ConsultationRepository(session)
         self.florist_repo = FloristRepository(session)
-        self.buffer = ConsultationBuffer()  # 🆕
+        self.buffer = ConsultationBufferService(session) # 🆕
 
     # НОВЫЕ ФУНКЦИИ
     
@@ -65,17 +65,10 @@ class ConsultationService:
         return consultation
     
     async def add_buffered_message(self, consultation_id: int, sender_id: int, 
-                                  message_text: str = None, photo_file_id: str = None) -> None:
+                                message_text: str = None, photo_file_id: str = None) -> None:
         """🆕 Добавить сообщение в буфер (для pending консультаций)"""
         
-        message_data = {
-            'sender_id': sender_id,
-            'message_text': message_text,
-            'photo_file_id': photo_file_id,
-            'consultation_id': consultation_id
-        }
-        
-        await self.buffer.add_message(consultation_id, message_data)
+        await self.buffer.add_message(consultation_id, sender_id, message_text, photo_file_id)
     
     async def get_buffered_messages(self, consultation_id: int) -> List[Dict]:
         """🆕 Получить буферизованные сообщения"""

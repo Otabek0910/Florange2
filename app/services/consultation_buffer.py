@@ -1,89 +1,88 @@
 # app/services/consultation_buffer.py
 
-import json
 import asyncio
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete
+from app.models import ConsultationBuffer
 
-class ConsultationBuffer:
-    # Глобальное хранилище в памяти
-
-    _memory_storage = {}
+class ConsultationBufferService:
+    """Сервис для буферизации сообщений консультаций в PostgreSQL"""
     
-    def __init__(self, redis_client=None):
-        self.redis = redis_client or self._get_redis()
+    def __init__(self, session: AsyncSession):
+        self.session = session
     
-    def _get_redis(self):
-        """Получить Redis клиент (fallback на память если Redis недоступен)"""
-        try:
-            import redis.asyncio as redis
-            from app.config import settings
-            return redis.Redis.from_url(settings.REDIS_URL)
-        except Exception as e:
-            print(f"⚠️ Redis недоступен, используем память: {e}")
-            return None  # Возвращаем None, чтобы использовать память
-    
-    async def add_message(self, consultation_id: int, message_data: Dict) -> None:
+    async def add_message(self, consultation_id: int, sender_id: int, 
+                         message_text: str = None, photo_file_id: str = None) -> None:
         """Добавить сообщение в буфер"""
-        key = f"consultation:{consultation_id}:buffer"
-        message_data['timestamp'] = datetime.utcnow().isoformat()
         
-        try:
-            if self.redis:  # Реальный Redis
-                await self.redis.lpush(key, json.dumps(message_data))
-                await self.redis.expire(key, 900)  # TTL 15 минут
-                print(f"✅ Message buffered in Redis for consultation {consultation_id}")
-            else:  # Fallback память
-                if key not in self._memory_storage:
-                    self._memory_storage[key] = []
-                self._memory_storage[key].append(message_data)
-                print(f"✅ Message buffered in memory, key: {key}")
-                
-                # Автоочистка через 15 минут
-                import asyncio
-                asyncio.create_task(self._auto_cleanup(key, 900))  # 15 минут
-                
-        except Exception as e:
-            print(f"❌ Buffer error: {e}")
+        buffer_message = ConsultationBuffer(
+            consultation_id=consultation_id,
+            sender_id=sender_id,
+            message_text=message_text,
+            photo_file_id=photo_file_id
+        )
+        
+        self.session.add(buffer_message)
+        await self.session.flush()
+        
+        print(f"✅ Message buffered in PostgreSQL for consultation {consultation_id}")
     
     async def get_messages(self, consultation_id: int) -> List[Dict]:
         """Получить все сообщения из буфера"""
-        key = f"consultation:{consultation_id}:buffer"
         
-        try:
-            if self.redis:  # Реальный Redis
-                messages = await self.redis.lrange(key, 0, -1)
-                result = [json.loads(msg) for msg in reversed(messages)]
-                print(f"📥 Retrieved {len(result)} messages from Redis buffer")
-                return result
-            else:  # Fallback память
-                result = self._memory_storage.get(key, [])
-                print(f"📥 Retrieved {len(result)} messages from memory buffer")
-                return result
-        except Exception as e:
-            print(f"❌ Buffer get error: {e}")
-            return []
+        result = await self.session.execute(
+            select(ConsultationBuffer)
+            .where(ConsultationBuffer.consultation_id == consultation_id)
+            .order_by(ConsultationBuffer.created_at)
+        )
+        
+        buffer_messages = result.scalars().all()
+        
+        # Преобразуем в словари
+        messages = []
+        for msg in buffer_messages:
+            messages.append({
+                'sender_id': msg.sender_id,
+                'message_text': msg.message_text,
+                'photo_file_id': msg.photo_file_id,
+                'timestamp': msg.created_at.isoformat()
+            })
+        
+        print(f"📥 Retrieved {len(messages)} messages from PostgreSQL buffer")
+        return messages
     
     async def clear_buffer(self, consultation_id: int) -> None:
-        """Очистить буфер"""
-        key = f"consultation:{consultation_id}:buffer"
+        """Очистить буфер для конкретной консультации"""
         
-        try:
-            if self.redis:  # Реальный Redis
-                await self.redis.delete(key)
-                print(f"🧹 Redis buffer cleared for consultation {consultation_id}")
-            else:  # Fallback память
-                self._memory_storage.pop(key, None)
-                print(f"🧹 Memory buffer cleared for consultation {consultation_id}")
-        except Exception as e:
-            print(f"❌ Buffer clear error: {e}")
+        await self.session.execute(
+            delete(ConsultationBuffer)
+            .where(ConsultationBuffer.consultation_id == consultation_id)
+        )
+        
+        print(f"🧹 PostgreSQL buffer cleared for consultation {consultation_id}")
     
-    async def _auto_cleanup(self, key: str, delay: int):
-        """Автоматическая очистка буфера через delay секунд"""
-        await asyncio.sleep(delay)
-        try:
-            if key in self._memory_storage:
-                del self._memory_storage[key]
-                print(f"🧹 Auto-cleaned memory buffer: {key}")
-        except Exception as e:
-            print(f"❌ Auto-cleanup error: {e}")
+    async def cleanup_old_buffers(self, hours: int = 24) -> int:
+        """Очистить старые буферы (старше N часов)"""
+        
+        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+        
+        result = await self.session.execute(
+            delete(ConsultationBuffer)
+            .where(ConsultationBuffer.created_at < cutoff_time)
+        )
+        
+        deleted_count = result.rowcount
+        print(f"🧹 Cleaned {deleted_count} old buffer messages")
+        return deleted_count
+    
+    async def get_buffer_size(self, consultation_id: int) -> int:
+        """Получить количество сообщений в буфере"""
+        
+        result = await self.session.execute(
+            select(ConsultationBuffer.id)
+            .where(ConsultationBuffer.consultation_id == consultation_id)
+        )
+        
+        return len(result.scalars().all())

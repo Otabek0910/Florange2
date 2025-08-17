@@ -361,3 +361,17 @@ class ProductComposition(Base):
     product = relationship("Product")
     flower = relationship("Flower", back_populates="compositions")
     
+class ConsultationBuffer(Base):
+    """Буфер сообщений для pending консультаций"""
+    __tablename__ = "consultation_buffer"
+    
+    id = Column(Integer, primary_key=True)
+    consultation_id = Column(Integer, ForeignKey("consultations.id", ondelete="CASCADE"), nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    message_text = Column(Text, nullable=True)
+    photo_file_id = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    # Связи
+    consultation = relationship("Consultation")
+    sender = relationship("User")
