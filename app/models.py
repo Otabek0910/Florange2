@@ -38,10 +38,12 @@ class RequestStatusEnum(enum.Enum):
     rejected = "rejected"
 
 class ConsultationStatusEnum(enum.Enum):
-    active = "active"
+    pending = "pending"                    # 🆕 Ожидание ответа флориста
+    active = "active"                      # Активная консультация  
     completed_by_client = "completed_by_client"
     completed_by_florist = "completed_by_florist"
-    expired = "expired"
+    timeout_no_response = "timeout_no_response"    # 🆕 Флорист не ответил за 10 мин
+    force_closed = "force_closed"          # 🆕 Клиент принудительно вышел (/start)
 
 class SupplyStatusEnum(enum.Enum):
     pending = "pending"      # Создан флористом

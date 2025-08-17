@@ -343,10 +343,18 @@ async def approve_request(callback: types.CallbackQuery):
                 try:
                     from app.services import FloristService
                     florist_service = FloristService(session)
-                    await florist_service.get_or_create_profile(created_user)
+                    profile = await florist_service.get_or_create_profile(created_user.id)
+                    
+                    # Устанавливаем текущее время как последнюю активность
+                    from datetime import datetime
+                    profile.last_seen = datetime.utcnow()
+                    profile.is_active = True
+                    
+                    await session.flush()
+                    print(f"✅ Created florist profile for user {created_user.id}")
                 except Exception as e:
-                    print(f"Florist profile creation error: {e}")
-            
+                    print(f"❌ Florist profile creation error: {e}")
+                        
             # Обновляем статус заявки
             request.status = RequestStatusEnum.approved
             request.approved_by = user.id

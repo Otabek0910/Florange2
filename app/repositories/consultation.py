@@ -96,3 +96,31 @@ class ConsultationRepository(BaseRepository[Consultation]):
         await self.session.flush()
         await self.session.refresh(review)
         return review
+    
+    async def get_messages(self, consultation_id: int) -> List[ConsultationMessage]:
+        """Получить сообщения консультации"""
+        result = await self.session.execute(
+            select(ConsultationMessage)
+            .where(ConsultationMessage.consultation_id == consultation_id)
+            .order_by(ConsultationMessage.created_at)
+        )
+        return result.scalars().all()
+
+    async def get_active_or_pending_consultation(self, user_id: int) -> Optional[Consultation]:
+        """Получить активную ИЛИ pending консультацию для пользователя"""
+        result = await self.session.execute(
+            select(Consultation)
+            .where(
+                and_(
+                    Consultation.status.in_([
+                        ConsultationStatusEnum.active, 
+                        ConsultationStatusEnum.pending
+                    ]),
+                    (
+                        (Consultation.client_id == user_id) |
+                        (Consultation.florist_id == user_id)
+                    )
+                )
+            )
+        )
+        return result.scalars().first()
