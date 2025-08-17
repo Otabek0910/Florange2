@@ -80,12 +80,12 @@ async def show_products(callback: types.CallbackQuery):
     # Показываем первый товар
     await show_product_card(callback, products, 0, cat_id, lang)
 
-async def show_product_card(callback: types.CallbackQuery, products: list, index: int, cat_id: int, lang: str):
-    """Показать карточку товара с навигацией"""
+async def show_product_card(callback: types.CallbackQuery, products, index, cat_id, lang):
+    """Показать карточку товара"""
     product = products[index]
-    total = len(products)
     
-    # Формируем текст карточки
+    # Формируем текст карточки (твоя логика)
+    total = len(products)
     currency = t(lang, "currency")
     name = product.name_ru if lang == "ru" else product.name_uz
     desc = (product.desc_ru if lang == "ru" else product.desc_uz) or ""
@@ -93,7 +93,8 @@ async def show_product_card(callback: types.CallbackQuery, products: list, index
     text = f"🛍 <b>{name}</b>\n\n{desc}\n\n💰 {product.price} {currency}"
     text += f"\n\n📊 {index + 1} из {total}"
     
-    # Кнопки навигации и действий
+    # Создаем клавиатуру навигации (твоя логика)
+    total = len(products)
     kb_rows = []
     
     # Навигация
@@ -109,31 +110,48 @@ async def show_product_card(callback: types.CallbackQuery, products: list, index
     # Действия
     kb_rows.extend([
         [types.InlineKeyboardButton(text=t(lang, "add_to_cart"), callback_data=f"add_{product.id}")],
+        [types.InlineKeyboardButton(text="🛒 К оформлению заказа", callback_data="goto_checkout")],  # ПРОСТАЯ КНОПКА
         [types.InlineKeyboardButton(text=t(lang, "back_to_categories"), callback_data="open_catalog")]
     ])
-    
+
     kb = types.InlineKeyboardMarkup(inline_keyboard=kb_rows)
     
-    # Отправляем фото или текст
-    photo_url = product.photo_url or "https://via.placeholder.com/400x300/FFB6C1/000000?text=🌸"
-    
     try:
-        if callback.message.photo:
-            # Если уже есть фото, редактируем подпись
-            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-        else:
-            # Если текстовое сообщение, отправляем новое с фото
-            await callback.message.delete()
+        # Пытаемся отправить фото (если есть)
+        if hasattr(product, 'photo_url') and product.photo_url:
             await callback.bot.send_photo(
                 chat_id=callback.message.chat.id,
-                photo=photo_url,
+                photo=product.photo_url,
                 caption=text,
                 reply_markup=kb,
                 parse_mode="HTML"
             )
-    except Exception:
-        # Fallback на текст
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            # Удаляем предыдущее сообщение
+            try:
+                await callback.message.delete()
+            except:
+                pass
+        else:
+            # Нет фото - редактируем текущее сообщение
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        print(f"Photo error: {e}")
+        # Fallback: всегда редактируем текст без фото
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception as edit_error:
+            print(f"Edit error: {edit_error}")
+            # Last fallback: отправляем новое сообщение
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            await callback.bot.send_message(
+                chat_id=callback.message.chat.id,
+                text=text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
 
 @router.callback_query(F.data.startswith("prod_"))
 async def navigate_products(callback: types.CallbackQuery):
@@ -155,3 +173,24 @@ async def navigate_products(callback: types.CallbackQuery):
         
     await show_product_card(callback, products, index, cat_id, lang)
     await callback.answer()
+
+@router.callback_query(F.data == "goto_checkout")
+async def goto_checkout(callback: types.CallbackQuery, user=None):
+    """Переход к оформлению заказа"""
+    if not user:
+        await callback.answer("Пользователь не найден")
+        return
+    
+    lang = user.lang or "ru"
+    
+    # Проверяем корзину
+    from app.utils.cart import get_cart
+    cart_data = get_cart(callback.from_user.id)
+    
+    if not cart_data:
+        await callback.answer("🛒 Корзина пуста! Добавьте товары перед оформлением.", show_alert=True)
+        return
+    
+    # Показываем корзину с кнопкой оформления
+    from app.handlers.cart import show_cart
+    await show_cart(callback)

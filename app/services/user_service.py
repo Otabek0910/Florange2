@@ -58,3 +58,10 @@ class UserService:
     async def get_admins(self) -> list[User]:
         """Получить список администраторов"""
         return await self.user_repo.get_by_role(RoleEnum.owner)
+    
+    async def get_user_by_id(self, user_id: int) -> User:
+        """Получить пользователя по ID"""
+        user = await self.user_repo.get(user_id)
+        if not user:
+            raise UserNotFoundError(f"User {user_id} not found")
+        return user

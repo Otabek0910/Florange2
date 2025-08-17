@@ -1,71 +1,92 @@
-"""Управление корзиной в Redis"""
+# app/utils/cart.py - ПОЛНАЯ ЗАМЕНА
+
 import redis
 import json
-from typing import Dict, Optional
-from app.config import settings
+from typing import Dict, List, Optional
 
 class CartManager:
-    """Менеджер корзины"""
-    
-    def __init__(self):
-        self.redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-    
-    def _get_cart_key(self, user_id: int) -> str:
-        """Получить ключ корзины для пользователя"""
-        return f"cart:{user_id}"
-    
-    def add_to_cart(self, user_id: int, product_id: int, qty: int = 1) -> None:
-        """Добавить товар в корзину"""
-        key = self._get_cart_key(user_id)
-        current = self.redis_client.hget(key, str(product_id))
-        current_qty = int(current) if current else 0
-        new_qty = current_qty + qty
+    def __init__(self, redis_url: str = "redis://localhost:6379"):
+        self.use_redis = True
+        self.memory_cache = {}  # Fallback storage
         
-        self.redis_client.hset(key, str(product_id), new_qty)
-        self.redis_client.expire(key, 900)  # TTL 15 минут
-    
-    def get_cart(self, user_id: int) -> Dict[str, int]:
-        """Получить корзину пользователя"""
-        key = self._get_cart_key(user_id)
-        cart_data = self.redis_client.hgetall(key)
-        return {pid: int(qty) for pid, qty in cart_data.items()} if cart_data else {}
-    
-    def remove_from_cart(self, user_id: int, product_id: int, qty: int = 1) -> None:
-        """Убрать товар из корзины"""
-        key = self._get_cart_key(user_id)
-        current = self.redis_client.hget(key, str(product_id))
-        if not current:
-            return
-        
-        current_qty = int(current)
-        new_qty = max(0, current_qty - qty)
-        
-        if new_qty == 0:
-            self.redis_client.hdel(key, str(product_id))
-        else:
-            self.redis_client.hset(key, str(product_id), new_qty)
-    
-    def clear_cart(self, user_id: int) -> None:
-        """Очистить корзину"""
-        key = self._get_cart_key(user_id)
-        self.redis_client.delete(key)
-    
-    def get_cart_total(self, user_id: int) -> int:
-        """Получить общее количество товаров в корзине"""
-        cart = self.get_cart(user_id)
-        return sum(cart.values())
+        try:
+            self.redis_client = redis.from_url(redis_url, decode_responses=True)
+            # Проверяем подключение
+            self.redis_client.ping()
+            print("✅ Redis подключен")
+        except Exception as e:
+            print(f"⚠️ Redis недоступен: {e}")
+            print("🔄 Переключаюсь на память (данные не сохраняются между перезапусками)")
+            self.use_redis = False
 
-# Backward compatibility
+    def get_cart(self, user_id: int) -> Dict:
+        """Получить корзину пользователя"""
+        try:
+            if self.use_redis:
+                key = f"cart:{user_id}"
+                cart_data = self.redis_client.hgetall(key)
+                return {int(k): int(v) for k, v in cart_data.items()}
+            else:
+                return self.memory_cache.get(user_id, {})
+        except Exception as e:
+            print(f"Cart get error: {e}")
+            return self.memory_cache.get(user_id, {})
+
+    def add_to_cart(self, user_id: int, product_id: int, quantity: int = 1):
+        """Добавить товар в корзину"""
+        try:
+            if self.use_redis:
+                key = f"cart:{user_id}"
+                self.redis_client.hincrby(key, product_id, quantity)
+                self.redis_client.expire(key, 86400)  # 24 часа
+            else:
+                if user_id not in self.memory_cache:
+                    self.memory_cache[user_id] = {}
+                current = self.memory_cache[user_id].get(product_id, 0)
+                self.memory_cache[user_id][product_id] = current + quantity
+        except Exception as e:
+            print(f"Cart add error: {e}")
+            # Fallback to memory
+            if user_id not in self.memory_cache:
+                self.memory_cache[user_id] = {}
+            current = self.memory_cache[user_id].get(product_id, 0)
+            self.memory_cache[user_id][product_id] = current + quantity
+
+    def remove_from_cart(self, user_id: int, product_id: int):
+        """Удалить товар из корзины"""
+        try:
+            if self.use_redis:
+                key = f"cart:{user_id}"
+                self.redis_client.hdel(key, product_id)
+            else:
+                if user_id in self.memory_cache:
+                    self.memory_cache[user_id].pop(product_id, None)
+        except Exception as e:
+            print(f"Cart remove error: {e}")
+
+    def clear_cart(self, user_id: int):
+        """Очистить корзину"""
+        try:
+            if self.use_redis:
+                key = f"cart:{user_id}"
+                self.redis_client.delete(key)
+            else:
+                self.memory_cache.pop(user_id, None)
+        except Exception as e:
+            print(f"Cart clear error: {e}")
+
+# Глобальный экземпляр
 cart_manager = CartManager()
 
-def add_to_cart(user_id: int, product_id: int, qty: int = 1) -> None:
-    cart_manager.add_to_cart(user_id, product_id, qty)
-
-def get_cart(user_id: int) -> Dict[str, int]:
+# Вспомогательные функции (для совместимости)
+def get_cart(user_id: int) -> Dict:
     return cart_manager.get_cart(user_id)
 
-def clear_cart(user_id: int) -> None:
-    cart_manager.clear_cart(user_id)
+def add_to_cart(user_id: int, product_id: int, quantity: int = 1):
+    return cart_manager.add_to_cart(user_id, product_id, quantity)
 
-def remove_from_cart(user_id: int, product_id: int, qty: int = 1) -> None:
-    cart_manager.remove_from_cart(user_id, product_id, qty)
+def remove_from_cart(user_id: int, product_id: int):
+    return cart_manager.remove_from_cart(user_id, product_id)
+
+def clear_cart(user_id: int):
+    return cart_manager.clear_cart(user_id)

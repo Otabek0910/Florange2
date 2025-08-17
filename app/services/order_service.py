@@ -109,3 +109,29 @@ class OrderService:
             "total_revenue": float(total_revenue),
             "status_counts": status_counts
         }
+    
+    async def get_order(self, order_id: int) -> Order:
+        """Получить заказ по ID"""
+        order = await self.order_repo.get(order_id)
+        if not order:
+            raise OrderNotFoundError(f"Order {order_id} not found")
+        return order
+    
+    async def get_order_with_details(self, order_id: int) -> Order:
+        """Получить заказ с деталями (пользователь, позиции)"""
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        
+        result = await self.session.execute(
+            select(Order)
+            .options(
+                selectinload(Order.user),
+                selectinload(Order.items).selectinload('product')  # ЗАГРУЖАЕМ ПРОДУКТЫ В ПОЗИЦИЯХ
+            )
+            .where(Order.id == order_id)
+        )
+        order = result.scalars().first()
+        
+        if not order:
+            raise OrderNotFoundError(f"Order {order_id} not found")
+        return order

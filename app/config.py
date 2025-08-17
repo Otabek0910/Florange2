@@ -24,11 +24,22 @@ class Settings:
 
     # Archive & AI
     ARCHIVE_CHANNEL_ID: Optional[str] = os.getenv("ARCHIVE_CHANNEL_ID")
+    
     YANDEX_GPT_API_KEY: Optional[str] = os.getenv("YANDEX_GPT_API_KEY")
     YANDEX_FOLDER_ID: Optional[str] = os.getenv("YANDEX_FOLDER_ID")
     
     # Payment
     CLICK_MERCHANT_ID: Optional[str] = os.getenv("CLICK_MERCHANT_ID")
     PAYME_MERCHANT_ID: Optional[str] = os.getenv("PAYME_MERCHANT_ID")
+
+    def validate_channel(self) -> bool:
+        """Проверить настройки канала"""
+        if not self.FLORIST_CHANNEL_ID:
+            print("⚠️ FLORIST_CHANNEL_ID не настроен")
+            return False
+        if not self.FLORIST_CHANNEL_ID.startswith("-"):
+            print(f"⚠️ FLORIST_CHANNEL_ID должен начинаться с '-': {self.FLORIST_CHANNEL_ID}")
+            return False
+        return True
 
 settings = Settings()

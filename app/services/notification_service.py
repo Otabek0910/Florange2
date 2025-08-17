@@ -2,6 +2,7 @@ from typing import List
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram import types
+from datetime import datetime
 
 from app.models import User, Order, RoleRequest
 from app.translate import t
@@ -53,25 +54,50 @@ class NotificationService:
             except Exception as e:
                 print(f"Error sending notification to admin {admin.tg_id}: {e}")
     
-    async def notify_florists_about_order(self, florists: List[User], order: Order, lang: str = "ru") -> None:
-        """Уведомить флористов о новом заказе"""
-        text = (
-            f"🆕 Новый заказ #{order.id}\n"
-            f"💰 {order.total_price} {t(lang, 'currency')}\n"
-            f"📍 {order.address}\n"
-            f"📞 {order.phone}\n"
+    async def notify_florists_about_order(self, florists: list, order, lang: str):
+        """Уведомить флористов о новом заказе С ПОДРОБНОСТЯМИ"""
+        user_name = getattr(order.user, 'first_name', 'Неизвестно') or 'Неизвестно'
+        
+        # ПОЛУЧАЕМ ДЕТАЛИ ЗАКАЗА (позиции) - ИСПРАВЛЕННАЯ ЛОГИКА
+        order_items = []
+        try:
+            if hasattr(order, 'items') and order.items:
+                for item in order.items:
+                    if hasattr(item, 'product') and item.product:
+                        product_name = item.product.name_ru if lang == "ru" else item.product.name_uz
+                        order_items.append(f"• {product_name} × {item.qty}")
+                    else:
+                        order_items.append(f"• Товар ID:{item.product_id} × {item.qty}")
+        except Exception as e:
+            print(f"Error getting order items: {e}")
+        
+        items_text = "\n".join(order_items) if order_items else "Позиции заказа недоступны"
+        
+        # ИНФОРМАТИВНОЕ УВЕДОМЛЕНИЕ
+        message = (
+            f"🆕 <b>Новый заказ #{order.id}</b>\n\n"
+            f"👤 <b>Клиент:</b> {user_name}\n"
+            f"📞 <b>Телефон:</b> {order.phone}\n"
+            f"📍 <b>Адрес:</b> {order.address}\n"
+            f"💰 <b>Сумма:</b> {order.total_price} сум\n"
+            f"🗓 <b>Создан:</b> {order.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"🛍 <b>Состав заказа:</b>\n{items_text}\n\n"
+            f"💬 <b>Комментарий:</b> {order.comment or 'Нет'}\n\n"
+            f"📋 Управляйте заказом через меню 'Управление заказами'"
         )
         
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Принять", callback_data=f"accept_{order.id}")],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel_{order.id}")]
-        ])
+        print(f"📧 Отправляем уведомление: {message[:100]}...")
         
         for florist in florists:
             try:
-                await self.bot.send_message(chat_id=int(florist.tg_id), text=text, reply_markup=kb)
-            except Exception:
-                pass
+                await self.bot.send_message(
+                    chat_id=int(florist.tg_id),
+                    text=message,
+                    parse_mode="HTML"
+                )
+                print(f"✅ Уведомление отправлено флористу {florist.tg_id}")
+            except Exception as e:
+                print(f"❌ Failed to notify florist {florist.tg_id}: {e}")
     
     async def notify_user_about_order_status(self, user: User, order: Order) -> None:
         """Уведомить пользователя об изменении статуса заказа"""
@@ -87,3 +113,97 @@ class NotificationService:
             await self.bot.send_message(chat_id=int(user.tg_id), text=text)
         except Exception:
             pass
+
+    async def notify_order_status_change(self, order, new_status: str, changed_by_user, lang: str = "ru"):
+        """Уведомить о смене статуса заказа"""
+        from app.models import RoleEnum
+        
+        # Получаем всех владельцев для уведомления
+        from app.database.database import get_session
+        from app.services import UserService
+        
+        async for session in get_session():
+            user_service = UserService(session)
+            owners = await user_service.user_repo.get_by_role(RoleEnum.owner)
+            florists = await user_service.user_repo.get_by_role(RoleEnum.florist)
+            
+            status_emoji = {
+                "accepted": "✅ ПРИНЯТ",
+                "canceled": "❌ ОТМЕНЕН", 
+                "preparing": "🔄 ГОТОВИТСЯ",
+                "ready": "🎉 ГОТОВ",
+                "delivering": "🚚 ДОСТАВЛЯЕТСЯ",
+                "delivered": "✅ ДОСТАВЛЕН"
+            }
+            
+            status_text = status_emoji.get(new_status, new_status.upper())
+            changer_name = f"{changed_by_user.first_name} {changed_by_user.last_name or ''}".strip()
+            changer_role = "👑 Владелец" if changed_by_user.role == RoleEnum.owner else "🌸 Флорист"
+            
+            message = (
+                f"📢 <b>Изменение статуса заказа</b>\n\n"
+                f"🆔 <b>Заказ:</b> #{order.id}\n"
+                f"📊 <b>Статус:</b> {status_text}\n"
+                f"👤 <b>Изменил:</b> {changer_name} ({changer_role})\n"
+                f"🕐 <b>Время:</b> {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+                f"💰 Сумма: {order.total_price} сум\n"
+                f"📍 Адрес: {order.address}"
+            )
+            
+            # Уведомляем владельцев (они видят кто принял)
+            for owner in owners:
+                try:
+                    await self.bot.send_message(
+                        chat_id=int(owner.tg_id),
+                        text=message,
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    print(f"Failed to notify owner {owner.tg_id}: {e}")
+            
+            # Флористов уведомляем только если заказ принят (чтобы они знали что заказ занят)
+            if new_status in ["accepted", "canceled"]:
+                simple_message = (
+                    f"📢 Заказ #{order.id} {status_text}\n"
+                    f"👤 Принял: {changer_name}"
+                )
+                
+                for florist in florists:
+                    # НЕ уведомляем того кто принял заказ
+                    if florist.id != changed_by_user.id:
+                        try:
+                            await self.bot.send_message(
+                                chat_id=int(florist.tg_id),
+                                text=simple_message,
+                                parse_mode="HTML"
+                            )
+                        except Exception as e:
+                            print(f"Failed to notify florist {florist.tg_id}: {e}")
+
+    async def hide_order_from_other_florists(self, order_id: int, taken_by_user):
+        """Скрыть заказ у других флористов после принятия"""
+        from app.database.database import get_session
+        from app.services import UserService
+        from app.models import RoleEnum
+        
+        async for session in get_session():
+            user_service = UserService(session)
+            florists = await user_service.user_repo.get_by_role(RoleEnum.florist)
+            
+            hide_message = (
+                f"🔒 <b>Заказ #{order_id} принят</b>\n\n"
+                f"👤 Принял: {taken_by_user.first_name}\n"
+                f"📊 Заказ больше недоступен для принятия"
+            )
+            
+            for florist in florists:
+                # НЕ отправляем тому кто принял
+                if florist.id != taken_by_user.id:
+                    try:
+                        await self.bot.send_message(
+                            chat_id=int(florist.tg_id),
+                            text=hide_message,
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        print(f"Failed to hide order from florist {florist.tg_id}: {e}")
