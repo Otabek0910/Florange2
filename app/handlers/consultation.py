@@ -12,6 +12,9 @@ from app.exceptions import ValidationError, UserNotFoundError
 import logging
 from datetime import datetime
 
+from aiogram.fsm.storage.base import StorageKey
+import os
+ARCHIVE_CHANNEL_ID = os.getenv("ARCHIVE_CHANNEL_ID")
 
 router = Router()
 
@@ -193,6 +196,7 @@ async def select_florist(callback: types.CallbackQuery, state: FSMContext):
 @router.message(ConsultationStates.CHATTING)
 async def handle_consultation_message(message: types.Message, state: FSMContext):
     """Обработка сообщений в АКТИВНОЙ консультации"""
+    
     data = await state.get_data()
     consultation_id = data.get('consultation_id')
     
@@ -255,83 +259,112 @@ async def handle_consultation_message(message: types.Message, state: FSMContext)
 
 @router.callback_query(F.data.startswith("end_consultation_"))
 async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
-    """Завершение консультации с полной очисткой"""
+    """Завершение консультации"""
     consultation_id = int(callback.data.split("_")[2])
     
     async for session in get_session():
         user, lang = await _get_user_and_lang(session, callback.from_user.id)
+        consultation_service = ConsultationService(session)
         
         try:
-            consultation_service = ConsultationService(session)
-            
-            # Получаем консультацию
             consultation = await consultation_service.consultation_repo.get(consultation_id)
             if not consultation:
                 await callback.answer("Консультация не найдена", show_alert=True)
                 return
             
+            # Определяем роли
+            is_client = user.id == consultation.client_id
+            is_florist = user.id == consultation.florist_id
+            
+            if not (is_client or is_florist):
+                await callback.answer("Вы не участник консультации", show_alert=True)
+                return
+            
             # Завершаем консультацию
-            consultation.status = ConsultationStatusEnum.completed_by_client \
-                if user.id == consultation.client_id \
-                else ConsultationStatusEnum.completed_by_florist
+            consultation.status = ConsultationStatusEnum.completed_by_client if is_client else ConsultationStatusEnum.completed_by_florist
             consultation.completed_at = datetime.utcnow()
             
-            # Архивируем если есть сообщения
-            from sqlalchemy import select
-            from app.models import ConsultationMessage
-            
-            result = await session.execute(
-                select(ConsultationMessage)
-                .where(ConsultationMessage.consultation_id == consultation_id)
-                .order_by(ConsultationMessage.sent_at)
-            )
-            messages = result.scalars().all()
-            
-            if messages:
-                from app.services.ai_archive_service import AIArchiveService
-                ai_service = AIArchiveService(callback.bot)
-                
-                # Генерируем тему
-                theme = await ai_service.generate_consultation_theme(messages)
-                consultation.theme = theme
-                
-                # Архивируем
-                archive_id = await ai_service.archive_consultation(consultation, messages)
-                consultation.archive_id = archive_id
+            # Архивируем в канал
+            messages = await consultation_service.consultation_repo.get_messages(consultation_id)
+            if messages and ARCHIVE_CHANNEL_ID:  # Используем прямо из os.getenv
+                try:
+                    from app.services.ai_archive_service import AIArchiveService
+                    ai_service = AIArchiveService(callback.bot)
+                    archive_id = await ai_service.archive_consultation(consultation, messages)
+                    consultation.archive_id = archive_id
+                    print(f"✅ Archived consultation {consultation_id} as {archive_id}")
+                except Exception as e:
+                    print(f"❌ Archive error: {e}")
             
             await session.commit()
-            
-            # Уведомляем другого участника
-            other_user_id = consultation.florist_id if user.id == consultation.client_id else consultation.client_id
             await session.refresh(consultation, ['client', 'florist'])
-            other_user = consultation.florist if user.id == consultation.client_id else consultation.client
             
-            if other_user:
-                try:
-                    await callback.bot.send_message(
-                        int(other_user.tg_id),
-                        "Консультация завершена собеседником."
-                    )
-                except Exception as e:
-                    print(f"Error notifying other user: {e}")
+            # Уведомляем обоих участников
+            client_tg_id = int(consultation.client.tg_id)
+            florist_tg_id = int(consultation.florist.tg_id)
             
-            # Очищаем состояние
+            # Флористу - просто уведомление и главное меню
+            florist_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+            ])
+            
+            await callback.bot.send_message(
+                florist_tg_id,
+                f"✅ Консультация #{consultation_id} завершена\n"
+                f"Клиент: {consultation.client.first_name}",
+                reply_markup=florist_kb
+            )
+            
+            # Клиенту - предложение оценить
+            if is_florist:  # Если завершил флорист - клиенту предлагаем оценку
+                rating_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        types.InlineKeyboardButton(text="⭐", callback_data=f"rate_{consultation_id}_1"),
+                        types.InlineKeyboardButton(text="⭐⭐", callback_data=f"rate_{consultation_id}_2"),
+                        types.InlineKeyboardButton(text="⭐⭐⭐", callback_data=f"rate_{consultation_id}_3"),
+                        types.InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data=f"rate_{consultation_id}_4"),
+                        types.InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data=f"rate_{consultation_id}_5")
+                    ],
+                    [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+                ])
+                
+                await callback.bot.send_message(
+                    client_tg_id,
+                    f"✅ Консультация завершена!\n\n"
+                    f"Пожалуйста, оцените работу флориста {consultation.florist.first_name}:",
+                    reply_markup=rating_kb
+                )
+            else:  # Если завершил клиент
+                client_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+                ])
+                await callback.bot.send_message(
+                    client_tg_id,
+                    "✅ Вы завершили консультацию",
+                    reply_markup=client_kb
+                )
+            
+            # Очищаем состояния обоих
             await state.clear()
             
-            # Предлагаем оценить (только клиенту)
-            if user.role == RoleEnum.client:
-                kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text=f"⭐ {i}", callback_data=f"rate_{consultation_id}_{i}") 
-                     for i in range(1, 6)],
-                    [types.InlineKeyboardButton(text=t(lang, "back_to_menu"), callback_data="main_menu")]
-                ])
-                await callback.message.answer(t(lang, "rate_florist_prompt"), reply_markup=kb)
-            else:
-                await callback.message.answer("Консультация завершена.")
-                
+            # Очищаем состояние второго участника
+            other_user_id = florist_tg_id if is_client else client_tg_id
+            other_key = StorageKey(
+                bot_id=callback.bot.id,
+                chat_id=other_user_id,
+                user_id=other_user_id
+            )
+            storage = callback.bot.storage if hasattr(callback.bot, 'storage') else None
+            if storage:
+                await storage.set_state(other_key, None)
+                await storage.set_data(other_key, {})
+            
+            await callback.answer("Консультация завершена")
+            await callback.message.delete()
+            
         except Exception as e:
             print(f"Error ending consultation: {e}")
-            await callback.answer("Ошибка при завершении консультации", show_alert=True)
+            await callback.answer("Ошибка при завершении", show_alert=True)
 
 @router.callback_query(F.data == "consultation_history")
 async def show_consultation_history(callback: types.CallbackQuery):
@@ -624,7 +657,7 @@ async def florist_accept_consultation(callback: types.CallbackQuery):
             
             # Получаем буферизованные сообщения и отправляем флористу
             buffered_messages = await consultation_service.flush_buffer_to_active(consultation_id)
-            
+            print(f"📥 Buffered messages count: {len(buffered_messages) if buffered_messages else 0}")
             await session.commit()
             
             # Уведомляем клиента что консультация принята
@@ -651,7 +684,7 @@ async def florist_accept_consultation(callback: types.CallbackQuery):
                                 int(user.tg_id),
                                 text=msg_data['message_text']
                             )
-                
+
                 # 2. Отправляем флористу меню управления консультацией
                 florist_kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [
@@ -690,21 +723,21 @@ async def florist_accept_consultation(callback: types.CallbackQuery):
             )
             await callback.answer("Консультация принята!")
 
-            # Для флориста
+            # Флорист
             florist_key = StorageKey(
                 bot_id=callback.bot.id,
                 chat_id=int(user.tg_id),
                 user_id=int(user.tg_id)
             )
-
+            
+            # Клиент  
             client_key = StorageKey(
                 bot_id=callback.bot.id,
                 chat_id=int(client.tg_id),
                 user_id=int(client.tg_id)
             )
-
-            storage = callback.message.bot.session.storage if hasattr(callback.message.bot, 'session') else None
-
+            
+            storage = callback.bot.storage if hasattr(callback.bot, 'storage') else None
             if storage:
                 await storage.set_state(florist_key, ConsultationStates.CHATTING)
                 await storage.set_state(client_key, ConsultationStates.CHATTING)
@@ -792,98 +825,50 @@ async def handle_waiting_messages(message: types.Message, state: FSMContext):
             await message.answer("❌ Ошибка сохранения сообщения")
 
 
-@router.callback_query(F.data.startswith("call_florist_"))
+@router.callback_query(F.data.startswith("call_florist_"))  
 async def call_florist(callback: types.CallbackQuery):
-    """Клиент просит позвонить флористу"""
+    """Клиент запрашивает номер флориста"""
     consultation_id = int(callback.data.split("_")[2])
     
     async for session in get_session():
-        user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        
-        # Получаем консультацию
-        from sqlalchemy import select
-        result = await session.execute(
-            select(Consultation).where(Consultation.id == consultation_id)
-        )
-        consultation = result.scalars().first()
-        
+        consultation = await session.get(Consultation, consultation_id)
         if not consultation:
             await callback.answer("Консультация не найдена", show_alert=True)
             return
-        
-        await session.refresh(consultation, ['client', 'florist'])
-        
-        # Отправляем запрос флористу
-        client_phone = user.phone or "Не указан"
-        client_name = user.first_name or "Клиент"
-        
-        try:
-            # ❌ БЫЛО: url=f"tel:{client_phone}"
-            # ✅ СТАЛО: Простая кнопка без tel: схемы
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text=f"📞 Номер: {client_phone}", callback_data="show_phone")]
-            ]) if client_phone != "Не указан" else None
             
-            await callback.bot.send_message(
-                int(consultation.florist.tg_id),
-                f"📞 Клиент {client_name} просит обратный звонок\n\n"
-                f"📱 Номер: {client_phone}\n"
-                f"💡 Скопируйте номер и позвоните через стандартный набор номера",
-                reply_markup=kb
-            )
-            
-            await callback.answer("✅ Запрос на звонок отправлен флористу")
-            
-        except Exception as e:
-            print(f"Call request error: {e}")
-            await callback.answer("❌ Ошибка отправки запроса", show_alert=True)
+        await session.refresh(consultation, ['florist'])
+        florist_phone = consultation.florist.phone or "Не указан"
+        
+        # Отправляем номер текстом
+        await callback.message.answer(
+            f"📞 Номер флориста: `{florist_phone}`\n\n"
+            f"Нажмите на номер чтобы скопировать и позвоните через приложение телефона.",
+            parse_mode="Markdown"
+        )
+        await callback.answer("Номер отправлен")
 
 ### 1.2 call_client() - флорист просит позвонить клиенту  
 @router.callback_query(F.data.startswith("call_client_"))
 async def call_client(callback: types.CallbackQuery):
-    """Флорист просит позвонить клиенту"""
+    """Флорист запрашивает номер клиента"""
     consultation_id = int(callback.data.split("_")[2])
     
     async for session in get_session():
-        user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        
-        # Получаем консультацию
-        from sqlalchemy import select
-        result = await session.execute(
-            select(Consultation).where(Consultation.id == consultation_id)
-        )
-        consultation = result.scalars().first()
-        
+        consultation = await session.get(Consultation, consultation_id)
         if not consultation:
             await callback.answer("Консультация не найдена", show_alert=True)
             return
-        
-        await session.refresh(consultation, ['client', 'florist'])
-        
-        # Отправляем запрос клиенту
-        florist_phone = user.phone or "Не указан"
-        florist_name = user.first_name or "Флорист"
-        
-        try:
-            # ❌ БЫЛО: url=f"tel:{florist_phone}"
-            # ✅ СТАЛО: Простая кнопка без tel: схемы
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text=f"📞 Номер: {florist_phone}", callback_data="show_phone")]
-            ]) if florist_phone != "Не указан" else None
             
-            await callback.bot.send_message(
-                int(consultation.client.tg_id),
-                f"📞 Флорист {florist_name} хочет с вами связаться\n\n"
-                f"📱 Номер: {florist_phone}\n"
-                f"💡 Скопируйте номер и позвоните через стандартный набор номера",
-                reply_markup=kb
-            )
-            
-            await callback.answer("✅ Запрос на звонок отправлен клиенту")
-            
-        except Exception as e:
-            print(f"Call request error: {e}")
-            await callback.answer("❌ Ошибка отправки запроса", show_alert=True)
+        await session.refresh(consultation, ['client'])
+        client_phone = consultation.client.phone or "Не указан"
+        
+        # Отправляем номер текстом с инструкцией
+        await callback.message.answer(
+            f"📞 Номер клиента: `{client_phone}`\n\n"
+            f"Нажмите на номер чтобы скопировать и позвоните через приложение телефона.",
+            parse_mode="Markdown"
+        )
+        await callback.answer("Номер отправлен")
 
 ### 1.3 show_phone_info() - новый обработчик для кнопки "Номер"
 @router.callback_query(F.data == "show_phone")
