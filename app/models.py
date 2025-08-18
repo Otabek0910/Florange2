@@ -214,8 +214,8 @@ class ConsultationMessage(Base):
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     message_text = Column(Text)
     photo_file_id = Column(String(255))
-    sent_at = Column(DateTime, default=datetime.utcnow)
-    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    sent_at = Column(DateTime, default=datetime.utcnow)  
     consultation = relationship("Consultation", back_populates="messages")
     sender = relationship("User")
 

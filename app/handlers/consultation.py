@@ -14,6 +14,9 @@ from datetime import datetime
 
 from aiogram.fsm.storage.base import StorageKey
 import os
+
+from app.config import settings
+
 ARCHIVE_CHANNEL_ID = os.getenv("ARCHIVE_CHANNEL_ID")
 
 router = Router()
@@ -241,10 +244,21 @@ async def handle_consultation_message(message: types.Message, state: FSMContext)
                 forwarded_text = f"{sender_role} {sender_name}:\n{message.text}"
                 
                 # Пересылаем получателю
-                await message.bot.send_message(
-                    chat_id=int(recipient_tg_id),
-                    text=forwarded_text
-                )
+                if message.photo:
+                    await message.copy_to(
+                        chat_id=int(recipient_tg_id),
+                        caption=f"{sender_role} {sender_name}"
+                    )
+                else:
+                    await message.copy_to(
+                        chat_id=int(recipient_tg_id),
+                        reply_markup=None
+                    )
+                    # Добавляем подпись отправителя отдельным сообщением
+                    await message.bot.send_message(
+                        chat_id=int(recipient_tg_id),
+                        text=f"↑ {sender_role} {sender_name}"
+                    )
                 
                 # Подтверждаем отправителю
                 await message.react([types.ReactionTypeEmoji(emoji="✅")])
@@ -286,7 +300,7 @@ async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
             
             # Архивируем в канал
             messages = await consultation_service.consultation_repo.get_messages(consultation_id)
-            if messages and ARCHIVE_CHANNEL_ID:  # Используем прямо из os.getenv
+            if messages and settings.ARCHIVE_CHANNEL_ID:  # Используем прямо из os.getenv
                 try:
                     from app.services.ai_archive_service import AIArchiveService
                     ai_service = AIArchiveService(callback.bot)
@@ -302,21 +316,9 @@ async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
             # Уведомляем обоих участников
             client_tg_id = int(consultation.client.tg_id)
             florist_tg_id = int(consultation.florist.tg_id)
-            
-            # Флористу - просто уведомление и главное меню
-            florist_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
-            ])
-            
-            await callback.bot.send_message(
-                florist_tg_id,
-                f"✅ Консультация #{consultation_id} завершена\n"
-                f"Клиент: {consultation.client.first_name}",
-                reply_markup=florist_kb
-            )
-            
-            # Клиенту - предложение оценить
-            if is_florist:  # Если завершил флорист - клиенту предлагаем оценку
+
+            if is_florist:
+                # Флорист завершил - уведомляем клиента с предложением оценки
                 rating_kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [
                         types.InlineKeyboardButton(text="⭐", callback_data=f"rate_{consultation_id}_1"),
@@ -334,7 +336,19 @@ async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
                     f"Пожалуйста, оцените работу флориста {consultation.florist.first_name}:",
                     reply_markup=rating_kb
                 )
-            else:  # Если завершил клиент
+            else:
+                # Клиент завершил - уведомляем флориста
+                florist_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+                ])
+                
+                await callback.bot.send_message(
+                    florist_tg_id,
+                    f"✅ Консультация завершена клиентом {consultation.client.first_name}",
+                    reply_markup=florist_kb
+                )
+                
+                # Клиенту тоже меню
                 client_kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
                 ])
@@ -343,7 +357,6 @@ async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
                     "✅ Вы завершили консультацию",
                     reply_markup=client_kb
                 )
-            
             # Очищаем состояния обоих
             await state.clear()
             
@@ -359,8 +372,10 @@ async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
                 await storage.set_state(other_key, None)
                 await storage.set_data(other_key, {})
             
+            await _clear_consultation_chat(callback.bot, client_tg_id, state)
+            await _clear_consultation_chat(callback.bot, florist_tg_id, state)
+
             await callback.answer("Консультация завершена")
-            await callback.message.delete()
             
         except Exception as e:
             print(f"Error ending consultation: {e}")
@@ -504,10 +519,10 @@ async def request_call_florist(callback: types.CallbackQuery):
         call_request_text = t(lang, "call_request_received", name=client.first_name, phone=client_phone)
         
         # Кнопка для набора номера (работает на мобильных)
+        clean_phone = client_phone.replace("+", "") if client_phone != "Не указан" else ""
         call_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=f"📞 Набрать {client_phone}", url=f"tel:{client_phone}")]
+            [types.InlineKeyboardButton(text=f"📞 Набрать {client_phone}", url=f"tel:{clean_phone}")]
         ]) if client_phone != "Не указан" else None
-        
         try:
             await callback.bot.send_message(
                 int(florist.tg_id), 
@@ -707,8 +722,9 @@ async def florist_accept_consultation(callback: types.CallbackQuery):
                     ]
                 ])
                 
+                client_tg_id = int(consultation.client.tg_id)
                 await callback.bot.send_message(
-                    int(client.tg_id),
+                    client_tg_id,
                     f"✅ Флорист {user.first_name} принял консультацию!\n\n💬 Теперь вы можете общаться в реальном времени.",
                     reply_markup=client_kb
                 )
@@ -733,19 +749,24 @@ async def florist_accept_consultation(callback: types.CallbackQuery):
             # Клиент  
             client_key = StorageKey(
                 bot_id=callback.bot.id,
-                chat_id=int(client.tg_id),
-                user_id=int(client.tg_id)
+                chat_id=client_tg_id,
+                user_id=client_tg_id
             )
             
-            storage = callback.bot.storage if hasattr(callback.bot, 'storage') else None
-            if storage:
-                await storage.set_state(florist_key, ConsultationStates.CHATTING)
-                await storage.set_state(client_key, ConsultationStates.CHATTING)
-                await storage.set_data(florist_key, {'consultation_id': consultation.id})
-                await storage.set_data(client_key, {'consultation_id': consultation.id})
-                print(f"✅ Both participants set to CHATTING state")
-            else:
-                print("⚠️ Could not access storage, using simpler approach")
+            try:
+                # Получаем диспетчер из контекста
+                dp = callback.bot.dispatcher if hasattr(callback.bot, 'dispatcher') else None
+                if dp and hasattr(dp, 'storage'):
+                    storage = dp.storage
+                    await storage.set_state(florist_key, ConsultationStates.CHATTING)
+                    await storage.set_state(client_key, ConsultationStates.CHATTING)
+                    await storage.set_data(florist_key, {'consultation_id': consultation.id})
+                    await storage.set_data(client_key, {'consultation_id': consultation.id})
+                    print(f"✅ Both participants set to CHATTING state")
+                else:
+                    print("⚠️ Storage not accessible")
+            except Exception as e:
+                print(f"Storage error: {e}")
 
             print(f"✅ Both participants set to CHATTING state")
             
@@ -847,6 +868,13 @@ async def call_florist(callback: types.CallbackQuery):
         )
         await callback.answer("Номер отправлен")
 
+        if florist_phone != "Не указан":
+            clean_phone = florist_phone.replace("+", "")
+            tel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"📞 Набрать", url=f"tel:{clean_phone}")]
+            ])
+            await callback.message.answer("👆 Или нажмите кнопку:", reply_markup=tel_kb)
+
 ### 1.2 call_client() - флорист просит позвонить клиенту  
 @router.callback_query(F.data.startswith("call_client_"))
 async def call_client(callback: types.CallbackQuery):
@@ -869,6 +897,13 @@ async def call_client(callback: types.CallbackQuery):
             parse_mode="Markdown"
         )
         await callback.answer("Номер отправлен")
+
+        if client_phone != "Не указан":
+            clean_phone = client_phone.replace("+", "")
+            tel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"📞 Набрать", url=f"tel:{clean_phone}")]
+            ])
+            await callback.message.answer("👆 Или нажмите кнопку:", reply_markup=tel_kb)
 
 ### 1.3 show_phone_info() - новый обработчик для кнопки "Номер"
 @router.callback_query(F.data == "show_phone")
