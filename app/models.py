@@ -196,12 +196,16 @@ class Consultation(Base):
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     florist_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(Enum(ConsultationStatusEnum), default=ConsultationStatusEnum.active)
+    status = Column(Enum(ConsultationStatusEnum), default=ConsultationStatusEnum.pending)  # ✅ pending по умолчанию
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)
     theme = Column(String(255))  # ИИ-генерируемая тема
     archive_id = Column(String(100))  # ID архива в канале
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # ✅ ДОБАВЬТЕ ЭТИ ДВА ПОЛЯ:
+    request_key = Column(String(100), nullable=True)  # ✅ Ключ идемпотентности
+    expires_at = Column(DateTime, nullable=True)      # ✅ Время истечения для pending
     
     client = relationship("User", foreign_keys=[client_id])
     florist = relationship("User", foreign_keys=[florist_id])

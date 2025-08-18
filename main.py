@@ -8,6 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.handlers import start, catalog, cart, checkout, admin, orders, consultation, florist
 from app.middleware.auth import AuthMiddleware
+from app.middleware.state_validation import StateValidationMiddleware, ConsultationCleanupMiddleware
 from app.database.database import init_db
 
 # Настройка логирования
@@ -35,6 +36,10 @@ async def main():
     # 🆕 Подключение AuthMiddleware для автоматического создания пользователей
     dp.message.middleware(AuthMiddleware())
     dp.callback_query.middleware(AuthMiddleware())
+    dp.message.middleware(StateValidationMiddleware())
+    dp.callback_query.middleware(StateValidationMiddleware())
+    dp.message.middleware(ConsultationCleanupMiddleware(cleanup_frequency=100))
+    print("✅ Consultation middleware registered")
 
     # Подключение роутеров
     dp.include_router(start.router)
@@ -45,6 +50,7 @@ async def main():
     dp.include_router(orders.router)
     dp.include_router(consultation.router)
     dp.include_router(florist.router)
+    
 
     print("🌸 Florange Bot запущен с AuthMiddleware...")
     await dp.start_polling(bot)

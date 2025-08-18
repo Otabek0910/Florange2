@@ -1,210 +1,296 @@
+# 🔧 app/services/consultation_service.py
+# 
+# ИНСТРУКЦИЯ: Найдите этот файл и ЗАМЕНИТЕ весь класс ConsultationService на код ниже
+
 import asyncio
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, or_, delete
+from sqlalchemy.orm import selectinload
+
 from app.repositories import ConsultationRepository, FloristRepository
-from app.models import Consultation, ConsultationMessage, ConsultationStatusEnum
+from app.models import Consultation, ConsultationMessage, ConsultationStatusEnum, ConsultationBuffer
 from app.exceptions import ValidationError, UserNotFoundError
-from app.services.consultation_buffer import ConsultationBufferService
+
+
+def generate_request_key(client_id: int, florist_id: int) -> str:
+    """Генерация ключа идемпотентности"""
+    # Округляем до минуты для предотвращения спама
+    timestamp = int(datetime.utcnow().timestamp() // 60)
+    return f"consult_{client_id}_{florist_id}_{timestamp}"
+
+
+class NotificationCircuitBreaker:
+    """Circuit Breaker для внешних уведомлений"""
+    
+    def __init__(self, failure_threshold=3, timeout=60):
+        self.failure_count = 0
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.last_failure_time = None
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+    
+    async def call(self, func, *args, **kwargs):
+        if self.state == "OPEN":
+            if time.time() - self.last_failure_time < self.timeout:
+                raise Exception("Circuit breaker is OPEN")
+            else:
+                self.state = "HALF_OPEN"
+        
+        try:
+            result = await func(*args, **kwargs)
+            if self.state == "HALF_OPEN":
+                self.state = "CLOSED"
+                self.failure_count = 0
+            return result
+        except Exception as e:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            
+            if self.failure_count >= self.failure_threshold:
+                self.state = "OPEN"
+            raise e
+
 
 class ConsultationService:
-    """Сервис для работы с консультациями"""
+    """Сервис для работы с консультациями (исправленная версия)"""
     
     def __init__(self, session: AsyncSession):
         self.session = session
         self.consultation_repo = ConsultationRepository(session)
         self.florist_repo = FloristRepository(session)
-        self.buffer = ConsultationBufferService(session) # 🆕
+        self.circuit_breaker = NotificationCircuitBreaker()
 
-    # НОВЫЕ ФУНКЦИИ
-    
-    async def request_consultation(self, client_id: int, florist_id: int) -> Consultation:
-        """🆕 Запросить консультацию (создает в статусе pending)"""
+    async def request_consultation_idempotent(self, client_id: int, florist_id: int, request_key: str) -> Consultation:
+        """🆕 Идемпотентный запрос консультации с защитой от гонок"""
         
-        # Проверяем что у клиента нет активных консультаций
-        active_consultation = await self.consultation_repo.get_active_or_pending_consultation(client_id)
-        if active_consultation:
-            raise ValidationError("У вас уже есть активная консультация")
+        # ✅ ИСПРАВЛЕНИЕ: НЕ создаём новую транзакцию, используем существующую
         
-        # Проверяем что флорист не занят
-        florist_consultation = await self.consultation_repo.get_active_consultation(florist_id)
-        if florist_consultation:
+        # 1. Проверяем существующий запрос (идемпотентность)
+        existing_query = select(Consultation).where(
+            or_(
+                Consultation.request_key == request_key,
+                and_(
+                    Consultation.client_id == client_id,
+                    Consultation.status.in_(['active', 'pending'])
+                )
+            )
+        ).with_for_update(skip_locked=True)
+        
+        result = await self.session.execute(existing_query)
+        existing = result.scalar_one_or_none()
+        
+        if existing:
+            return existing  # Идемпотентный возврат
+        
+        # 2. Проверяем доступность флориста с блокировкой
+        florist_busy_query = select(Consultation).where(
+            and_(
+                Consultation.florist_id == florist_id,
+                Consultation.status.in_(['active', 'pending'])
+            )
+        ).with_for_update(skip_locked=True)
+        
+        florist_busy_result = await self.session.execute(florist_busy_query)
+        florist_busy = florist_busy_result.scalar_one_or_none()
+        
+        if florist_busy:
             raise ValidationError("Флорист сейчас занят с другим клиентом")
         
-        # Создаем консультацию в статусе pending
+        # 3. Создаём консультацию атомарно
         consultation = Consultation(
             client_id=client_id,
             florist_id=florist_id,
-            status=ConsultationStatusEnum.pending  # 🆕 Не active!
+            status=ConsultationStatusEnum.pending,
+            request_key=request_key,
+            expires_at=datetime.utcnow() + timedelta(minutes=15)
         )
-        consultation = await self.consultation_repo.create(consultation)
         
-        # Запускаем таймер на 10 минут
-        asyncio.create_task(self._timeout_consultation(consultation.id))
+        self.session.add(consultation)
+        await self.session.flush()  # Получаем ID
         
         return consultation
-    
+
     async def accept_consultation(self, consultation_id: int, florist_id: int) -> Consultation:
-        """🆕 Флорист принимает консультацию"""
+        """Принятие консультации флористом"""
         
-        consultation = await self.consultation_repo.get(consultation_id)
+        # ✅ ИСПРАВЛЕНИЕ: НЕ создаём новую транзакцию
+        
+        # Блокируем консультацию для обновления
+        query = select(Consultation).where(
+            and_(
+                Consultation.id == consultation_id,
+                Consultation.florist_id == florist_id,
+                Consultation.status == ConsultationStatusEnum.pending
+            )
+        ).with_for_update()
+        
+        result = await self.session.execute(query)
+        consultation = result.scalar_one_or_none()
+        
         if not consultation:
-            raise ValidationError("Консультация не найдена")
+            raise ValidationError("Консультация не найдена или уже неактивна")
         
-        if consultation.florist_id != florist_id:
-            raise ValidationError("Это не ваша консультация")
+        # Проверяем что не истекла
+        if consultation.expires_at and consultation.expires_at < datetime.utcnow():
+            consultation.status = ConsultationStatusEnum.expired
+            await self.session.flush()
+            raise ValidationError("Консультация истекла")
         
-        if consultation.status != ConsultationStatusEnum.pending:
-            raise ValidationError("Консультация уже не ожидает ответа")
-        
-        # Меняем статус на active
+        # Активируем консультацию
         consultation.status = ConsultationStatusEnum.active
+        consultation.started_at = datetime.utcnow()
+        consultation.expires_at = None  # Убираем таймаут
+        
         await self.session.flush()
         
+        # Доставляем буферные сообщения
+        await self._deliver_buffered_messages(consultation_id)
+        
         return consultation
-    
-    async def add_buffered_message(self, consultation_id: int, sender_id: int, 
-                                message_text: str = None, photo_file_id: str = None) -> None:
-        """🆕 Добавить сообщение в буфер (для pending консультаций)"""
+
+    async def decline_consultation(self, consultation_id: int, florist_id: int) -> Consultation:
+        """Отклонение консультации флористом"""
         
-        await self.buffer.add_message(consultation_id, sender_id, message_text, photo_file_id)
-    
-    async def get_buffered_messages(self, consultation_id: int) -> List[Dict]:
-        """🆕 Получить буферизованные сообщения"""
-        return await self.buffer.get_messages(consultation_id)
-    
-    async def flush_buffer_to_active(self, consultation_id: int) -> List[Dict]:
-        """🆕 Перенести все сообщения из буфера в активную консультацию"""
+        # ✅ ИСПРАВЛЕНИЕ: НЕ создаём новую транзакцию
         
-        # Получаем сообщения из буфера
-        messages = await self.buffer.get_messages(consultation_id)
+        query = select(Consultation).where(
+            and_(
+                Consultation.id == consultation_id,
+                Consultation.florist_id == florist_id,
+                Consultation.status == ConsultationStatusEnum.pending
+            )
+        ).with_for_update()
+        
+        result = await self.session.execute(query)
+        consultation = result.scalar_one_or_none()
+        
+        if not consultation:
+            raise ValidationError("Консультация не найдена")
+        
+        consultation.status = ConsultationStatusEnum.completed
+        consultation.completed_at = datetime.utcnow()
         
         # Очищаем буфер
-        await self.buffer.clear_buffer(consultation_id)
+        await self._clear_buffered_messages(consultation_id)
         
-        return messages
-    
-    async def _timeout_consultation(self, consultation_id: int) -> None:
-        """🆕 Таймаут консультации через 10 минут"""
-        await asyncio.sleep(600)  # 10 минут
-        
-        try:
-            consultation = await self.consultation_repo.get(consultation_id)
-            if consultation and consultation.status == ConsultationStatusEnum.pending:
-                consultation.status = ConsultationStatusEnum.timeout_no_response
-                consultation.completed_at = datetime.utcnow()
-                await self.session.commit()
-                
-                # Уведомляем клиента
-                await self._notify_consultation_timeout(consultation)
-                
-        except Exception as e:
-            print(f"Timeout error: {e}")
-    
-    async def _notify_consultation_timeout(self, consultation) -> None:
-        """🆕 Уведомить клиента о таймауте"""
-        # Тут будет логика уведомления через бота
-        pass
-        
-    # СТАРЫЕ ФУНКЦИИ
+        return consultation
 
-    async def start_consultation(self, client_id: int, florist_id: int) -> Consultation:
-        """ОБНОВЛЕНО: Теперь создает pending консультацию"""
-        return await self.request_consultation(client_id, florist_id)
-    
-    async def get_active_consultation(self, user_id: int) -> Optional[Consultation]:
-        """ОБНОВЛЕНО: Получить активную ИЛИ pending консультацию пользователя"""
-        return await self.consultation_repo.get_active_or_pending_consultation(user_id)
-    
-    async def send_message(self, consultation_id: int, sender_id: int, 
-                          message_text: str = None, photo_file_id: str = None) -> ConsultationMessage:
-        """ОБНОВЛЕНО: Отправить сообщение в консультацию или буфер"""
+    async def add_buffered_message(self, consultation_id: int, sender_id: int, 
+                                 message_text: str = None, photo_file_id: str = None):
+        """Добавление сообщения в буфер (пока флорист не ответил)"""
         
-        # Получаем консультацию
-        consultation = await self.consultation_repo.get(consultation_id)
-        if not consultation:
-            raise ValidationError("Консультация не найдена")
-        
-        # Проверяем что отправитель - участник консультации
-        if sender_id not in [consultation.client_id, consultation.florist_id]:
-            raise ValidationError("Вы не участник этой консультации")
-        
-        # Если консультация pending - добавляем в буфер
-        if consultation.status == ConsultationStatusEnum.pending:
-            await self.add_buffered_message(consultation_id, sender_id, message_text, photo_file_id)
-            return None  # Сообщение в буфере, не в БД
-        
-        # Если консультация active - сохраняем в БД как обычно
-        elif consultation.status == ConsultationStatusEnum.active:
-            message = await self.consultation_repo.add_message(
-                consultation_id, sender_id, message_text, photo_file_id
-            )
-            
-            # Обновляем активность флориста если он отправитель
-            if sender_id == consultation.florist_id:
-                await self.florist_repo.update_last_seen(sender_id)
-            
-            return message
-        
-        else:
-            raise ValidationError("Консультация не активна")
-    
-    async def complete_consultation(self, consultation_id: int, user_id: int) -> Optional[Consultation]:
-        """Завершить консультацию"""
-        
-        # Получаем консультацию
-        consultation = await self.consultation_repo.get(consultation_id)
-        if not consultation:
-            raise ValidationError("Консультация не найдена")
-        
-        # Определяем кто завершает
-        if user_id == consultation.client_id:
-            completed_by = "client"
-        elif user_id == consultation.florist_id:
-            completed_by = "florist"
-        else:
-            raise ValidationError("Вы не участник этой консультации")
-        
-        # Завершаем консультацию
-        return await self.consultation_repo.complete_consultation(consultation_id, completed_by)
-    
-    async def rate_florist(self, consultation_id: int, client_id: int, rating: int) -> None:
-        """Поставить оценку флористу"""
-        
-        if not (1 <= rating <= 5):
-            raise ValidationError("Рейтинг должен быть от 1 до 5")
-        
-        # Получаем консультацию
-        consultation = await self.consultation_repo.get(consultation_id)
-        if not consultation:
-            raise ValidationError("Консультация не найдена")
-        
-        if consultation.client_id != client_id:
-            raise ValidationError("Только клиент может оценить флориста")
-        
-        if consultation.status == ConsultationStatusEnum.active:
-            raise ValidationError("Нельзя оценить во время активной консультации")
-        
-        # Добавляем отзыв
-        await self.consultation_repo.add_review(
-            consultation_id, client_id, consultation.florist_id, rating
+        buffer_msg = ConsultationBuffer(
+            consultation_id=consultation_id,
+            sender_id=sender_id,
+            message_text=message_text,
+            photo_file_id=photo_file_id
         )
         
-        # Пересчитываем рейтинг флориста
-        await self.florist_repo.update_rating(consultation.florist_id)
-    
-    async def get_consultation_with_participants(self, consultation_id: int) -> Optional[dict]:
-        """Получить консультацию с данными участников"""
-        consultation = await self.consultation_repo.get(consultation_id)
+        self.session.add(buffer_msg)
+        await self.session.commit()
+
+    async def _deliver_buffered_messages(self, consultation_id: int):
+        """Доставка буферных сообщений с гарантиями"""
+        
+        # Получаем все буферные сообщения
+        query = select(ConsultationBuffer).where(
+            ConsultationBuffer.consultation_id == consultation_id
+        ).order_by(ConsultationBuffer.created_at).with_for_update()
+        
+        result = await self.session.execute(query)
+        buffered_messages = result.scalars().all()
+        
+        if not buffered_messages:
+            return
+        
+        # Получаем консультацию с участниками
+        consultation_query = select(Consultation).options(
+            selectinload(Consultation.client),
+            selectinload(Consultation.florist)
+        ).where(Consultation.id == consultation_id)
+        
+        consultation_result = await self.session.execute(consultation_query)
+        consultation = consultation_result.scalar_one()
+        
+        # Переносим сообщения в основную таблицу
+        for msg in buffered_messages:
+            consultation_msg = ConsultationMessage(
+                consultation_id=consultation_id,
+                sender_id=msg.sender_id,
+                message_text=msg.message_text,
+                photo_file_id=msg.photo_file_id,
+                created_at=msg.created_at
+            )
+            self.session.add(consultation_msg)
+        
+        # Удаляем из буфера
+        await self._clear_buffered_messages(consultation_id)
+
+    async def _clear_buffered_messages(self, consultation_id: int):
+        """Очистка буферных сообщений"""
+        delete_query = delete(ConsultationBuffer).where(
+            ConsultationBuffer.consultation_id == consultation_id
+        )
+        await self.session.execute(delete_query)
+
+    async def complete_consultation(self, consultation_id: int, user_id: int):
+        """Завершение консультации"""
+        
+        # ✅ ИСПРАВЛЕНИЕ: НЕ создаём новую транзакцию
+        
+        query = select(Consultation).where(
+            and_(
+                Consultation.id == consultation_id,
+                or_(
+                    Consultation.client_id == user_id,
+                    Consultation.florist_id == user_id
+                ),
+                Consultation.status == ConsultationStatusEnum.active
+            )
+        ).with_for_update()
+        
+        result = await self.session.execute(query)
+        consultation = result.scalar_one_or_none()
+        
         if not consultation:
-            return None
+            raise ValidationError("Консультация не найдена или уже завершена")
         
-        # Загружаем связанные данные
-        await self.session.refresh(consultation, ['client', 'florist'])
+        consultation.status = ConsultationStatusEnum.completed
+        consultation.completed_at = datetime.utcnow()
         
-        return {
-            'consultation': consultation,
-            'client': consultation.client,
-            'florist': consultation.florist
-        }
+        return consultation
+
+    async def cleanup_expired_consultations(self) -> int:
+        """Очистка истёкших консультаций"""
+        
+        # Используем SQL функцию из миграции
+        result = await self.session.execute("SELECT cleanup_expired_consultations()")
+        count = result.scalar()
+        await self.session.commit()
+        
+        return count
+
+    # Старые методы для обратной совместимости
+    async def request_consultation(self, client_id: int, florist_id: int) -> Consultation:
+        """Обёртка для старого метода"""
+        request_key = generate_request_key(client_id, florist_id)
+        return await self.request_consultation_idempotent(client_id, florist_id, request_key)
+
+    async def get_active_consultation(self, user_id: int) -> Optional[Consultation]:
+        """Получить активную консультацию пользователя"""
+        query = select(Consultation).where(
+            and_(
+                or_(
+                    Consultation.client_id == user_id,
+                    Consultation.florist_id == user_id
+                ),
+                Consultation.status.in_(['active', 'pending'])
+            )
+        )
+        
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
