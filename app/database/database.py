@@ -25,8 +25,3 @@ async def init_db():
     except Exception as e:
         print(f"❌ Ошибка инициализации БД: {e}")
         raise
-
-# Действия:
-# 1. Заменить содержимое app/database/database.py
-# 2. Убрать load_dotenv() - теперь через config
-# 3. Использовать config.DATABASE_URL

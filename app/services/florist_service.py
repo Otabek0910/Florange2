@@ -115,3 +115,13 @@ class FloristService:
         
         self.session.add(profile)
         return profile
+    
+    async def update_activity(self, user_id: int):
+        """Обновить время последней активности флориста"""
+        try:
+            profile = await self.get_or_create_profile(user_id)
+            profile.last_seen = datetime.utcnow()
+            # session.commit() будет вызван в middleware
+        except Exception as e:
+            # Логируем, но не падаем
+            print(f"Failed to update florist activity for user {user_id}: {e}")
