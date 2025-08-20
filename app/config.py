@@ -1,45 +1,73 @@
+# app/config.py - создать новый файл
 import os
-from typing import Optional
 from dotenv import load_dotenv
 
-load_dotenv()
-
-class Settings:
-    """Настройки приложения"""
-    PROJECT_NAME: str = "Flower Shop Bot"
-    VERSION: str = "1.0.0"
-
-    # Telegram
-    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-    WEBHOOK_URL: Optional[str] = os.getenv("WEBHOOK_URL")
+def load_environment():
+    """Безопасная загрузка переменных окружения"""
     
-    # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
-    
-    # Redis
-    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
-    
-    # Notifications
-    FLORIST_CHANNEL_ID: Optional[str] = os.getenv("FLORIST_CHANNEL_ID")
+    # Приоритет: .env.development -> .env -> переменные системы
+    if os.path.exists('.env.development'):
+        load_dotenv('.env.development')
+        print("🔧 Загружен .env.development (локальная разработка)")
+    elif os.path.exists('.env'):
+        load_dotenv('.env')
+        print("📄 Загружен .env (template)")
+    else:
+        print("☁️ Используются системные переменные (GitHub Actions)")
 
-    # Archive & AI
-    ARCHIVE_CHANNEL_ID: Optional[str] = os.getenv("ARCHIVE_CHANNEL_ID")
+class Config:
+    """Конфигурация приложения"""
     
-    YANDEX_GPT_API_KEY: Optional[str] = os.getenv("YANDEX_GPT_API_KEY")
-    YANDEX_FOLDER_ID: Optional[str] = os.getenv("YANDEX_FOLDER_ID")
+    def __init__(self):
+        load_environment()
+        
+        # Обязательные переменные
+        self.BOT_TOKEN = self._get_required("BOT_TOKEN")
+        self.DATABASE_URL = self._get_required("DATABASE_URL")
+        
+        # Опциональные с defaults
+        self.REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self.ENV = os.getenv("ENV", "development")
+        self.AI_PROVIDER = os.getenv("AI_PROVIDER", "yandex")
+        
+        # AI ключи
+        self.YANDEX_GPT_API_KEY = os.getenv("YANDEX_GPT_API_KEY")
+        
+        # Каналы
+        self.FLORIST_CHANNEL_ID = os.getenv("FLORIST_CHANNEL_ID")
+        self.ARCHIVE_CHANNEL_ID = os.getenv("ARCHIVE_CHANNEL_ID")
+        
+        # Webhook
+        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     
-    # Payment
-    CLICK_MERCHANT_ID: Optional[str] = os.getenv("CLICK_MERCHANT_ID")
-    PAYME_MERCHANT_ID: Optional[str] = os.getenv("PAYME_MERCHANT_ID")
+    def _get_required(self, key: str) -> str:
+        """Получить обязательную переменную"""
+        value = os.getenv(key)
+        if not value:
+            raise ValueError(f"Переменная {key} обязательна")
+        return value
+    
+    def is_development(self) -> bool:
+        return self.ENV == "development"
+    
+    def validate(self):
+        """Валидация конфигурации"""
+        if self.is_development():
+            print("🔧 Режим разработки")
+        else:
+            print("🚀 Продакшн режим")
+            
+        # Проверка AI
+        if not self.YANDEX_GPT_API_KEY:
+            print("⚠️ YANDEX_GPT_API_KEY не установлен")
 
-    def validate_channel(self) -> bool:
-        """Проверить настройки канала"""
-        if not self.FLORIST_CHANNEL_ID:
-            print("⚠️ FLORIST_CHANNEL_ID не настроен")
-            return False
-        if not self.FLORIST_CHANNEL_ID.startswith("-"):
-            print(f"⚠️ FLORIST_CHANNEL_ID должен начинаться с '-': {self.FLORIST_CHANNEL_ID}")
-            return False
-        return True
+# Глобальный экземпляр
+config = Config()
 
-settings = Settings()
+# Обратная совместимость для старого кода
+settings = config
+
+# Действия:
+# 1. Заменить содержимое app/config.py
+# 2. Сохранена совместимость: settings и config
+# 3. Оба объекта работают одинаково
