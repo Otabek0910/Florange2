@@ -1,5 +1,4 @@
-# app/database/__init__.py - создать этот файл
+# app/database/__init__.py - обновить импорты
+from .database import get_session, init_db, close_db, get_engine
 
-from .database import get_session, init_db, engine
-
-__all__ = ["get_session", "init_db", "engine"]
+__all__ = ["get_session", "init_db", "close_db", "get_engine"]

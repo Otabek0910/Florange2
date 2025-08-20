@@ -6,8 +6,10 @@ Diana Flowers Bot v2.0
 __version__ = "2.0.0"
 
 # Экспорт основных компонентов
-# Ensure that database/uow.py exists and contains get_uow and UnitOfWork
-from .database.uow import get_uow, UnitOfWork
-from .handlers.base import BaseHandler
-
-__all__ = ["get_uow", "UnitOfWork", "BaseHandler"]
+try:
+    from .database.uow import get_uow, UnitOfWork
+    from .handlers.base import BaseHandler
+    __all__ = ["get_uow", "UnitOfWork", "BaseHandler"]
+except ImportError:
+    # Если модули не найдены, пропускаем
+    __all__ = []

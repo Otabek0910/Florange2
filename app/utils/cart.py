@@ -1,49 +1,69 @@
-# app/utils/cart.py - ПОЛНАЯ ЗАМЕНА
-
-import redis
+# app/utils/cart.py - полная замена на async Redis
+import asyncio
 import json
 from typing import Dict, List, Optional
+import redis.asyncio as redis
 
 class CartManager:
     def __init__(self, redis_url: str = "redis://localhost:6379"):
+        self.redis_url = redis_url
         self.use_redis = True
         self.memory_cache = {}  # Fallback storage
+        self._redis_client = None
         
-        try:
-            self.redis_client = redis.from_url(redis_url, decode_responses=True)
-            # Проверяем подключение
-            self.redis_client.ping()
-            print("✅ Redis подключен")
-        except Exception as e:
-            print(f"⚠️ Redis недоступен: {e}")
-            print("🔄 Переключаюсь на память (данные не сохраняются между перезапусками)")
-            self.use_redis = False
+    async def _get_redis_client(self):
+        """Получить или создать async Redis клиент"""
+        if not self._redis_client:
+            try:
+                self._redis_client = redis.from_url(
+                    self.redis_url, 
+                    decode_responses=True,
+                    socket_keepalive=True,
+                    socket_keepalive_options={}
+                )
+                # Проверяем подключение
+                await self._redis_client.ping()
+                print("✅ Redis подключен (async)")
+                self.use_redis = True
+            except Exception as e:
+                print(f"⚠️ Redis недоступен: {e}")
+                print("🔄 Переключаюсь на память")
+                self.use_redis = False
+                self._redis_client = None
+        return self._redis_client
 
-    def get_cart(self, user_id: int) -> Dict:
+    async def get_cart(self, user_id: int) -> Dict:
         """Получить корзину пользователя"""
         try:
             if self.use_redis:
-                key = f"cart:{user_id}"
-                cart_data = self.redis_client.hgetall(key)
-                return {int(k): int(v) for k, v in cart_data.items()}
-            else:
-                return self.memory_cache.get(user_id, {})
+                redis_client = await self._get_redis_client()
+                if redis_client:
+                    key = f"cart:{user_id}"
+                    cart_data = await redis_client.hgetall(key)
+                    return {int(k): int(v) for k, v in cart_data.items()} if cart_data else {}
+            
+            return self.memory_cache.get(user_id, {})
         except Exception as e:
             print(f"Cart get error: {e}")
             return self.memory_cache.get(user_id, {})
 
-    def add_to_cart(self, user_id: int, product_id: int, quantity: int = 1):
+    async def add_to_cart(self, user_id: int, product_id: int, quantity: int = 1):
         """Добавить товар в корзину"""
         try:
             if self.use_redis:
-                key = f"cart:{user_id}"
-                self.redis_client.hincrby(key, product_id, quantity)
-                self.redis_client.expire(key, 86400)  # 24 часа
-            else:
-                if user_id not in self.memory_cache:
-                    self.memory_cache[user_id] = {}
-                current = self.memory_cache[user_id].get(product_id, 0)
-                self.memory_cache[user_id][product_id] = current + quantity
+                redis_client = await self._get_redis_client()
+                if redis_client:
+                    key = f"cart:{user_id}"
+                    await redis_client.hincrby(key, product_id, quantity)
+                    await redis_client.expire(key, 86400)  # 24 часа
+                    return
+            
+            # Fallback to memory
+            if user_id not in self.memory_cache:
+                self.memory_cache[user_id] = {}
+            current = self.memory_cache[user_id].get(product_id, 0)
+            self.memory_cache[user_id][product_id] = current + quantity
+            
         except Exception as e:
             print(f"Cart add error: {e}")
             # Fallback to memory
@@ -52,41 +72,80 @@ class CartManager:
             current = self.memory_cache[user_id].get(product_id, 0)
             self.memory_cache[user_id][product_id] = current + quantity
 
-    def remove_from_cart(self, user_id: int, product_id: int):
+    async def remove_from_cart(self, user_id: int, product_id: int):
         """Удалить товар из корзины"""
         try:
             if self.use_redis:
-                key = f"cart:{user_id}"
-                self.redis_client.hdel(key, product_id)
-            else:
-                if user_id in self.memory_cache:
-                    self.memory_cache[user_id].pop(product_id, None)
+                redis_client = await self._get_redis_client()
+                if redis_client:
+                    key = f"cart:{user_id}"
+                    await redis_client.hdel(key, product_id)
+                    return
+            
+            if user_id in self.memory_cache:
+                self.memory_cache[user_id].pop(product_id, None)
         except Exception as e:
             print(f"Cart remove error: {e}")
 
-    def clear_cart(self, user_id: int):
+    async def clear_cart(self, user_id: int):
         """Очистить корзину"""
         try:
             if self.use_redis:
-                key = f"cart:{user_id}"
-                self.redis_client.delete(key)
-            else:
-                self.memory_cache.pop(user_id, None)
+                redis_client = await self._get_redis_client()
+                if redis_client:
+                    key = f"cart:{user_id}"
+                    await redis_client.delete(key)
+                    return
+            
+            self.memory_cache.pop(user_id, None)
         except Exception as e:
             print(f"Cart clear error: {e}")
+
+    async def close(self):
+        """Закрыть соединение с Redis"""
+        if self._redis_client:
+            try:
+                await self._redis_client.aclose()
+                print("✅ Redis соединение закрыто")
+            except Exception as e:
+                print(f"Redis close error: {e}")
+            finally:
+                self._redis_client = None
 
 # Глобальный экземпляр
 cart_manager = CartManager()
 
-# Вспомогательные функции (для совместимости)
+# Синхронные обертки для совместимости (НЕ РЕКОМЕНДУЕТСЯ)
 def get_cart(user_id: int) -> Dict:
-    return cart_manager.get_cart(user_id)
+    """DEPRECATED: Используйте await cart_manager.get_cart()"""
+    try:
+        return asyncio.run(cart_manager.get_cart(user_id))
+    except RuntimeError:
+        # Если уже в event loop, используем память
+        return cart_manager.memory_cache.get(user_id, {})
 
 def add_to_cart(user_id: int, product_id: int, quantity: int = 1):
-    return cart_manager.add_to_cart(user_id, product_id, quantity)
+    """DEPRECATED: Используйте await cart_manager.add_to_cart()"""
+    try:
+        return asyncio.run(cart_manager.add_to_cart(user_id, product_id, quantity))
+    except RuntimeError:
+        # Fallback to memory
+        if user_id not in cart_manager.memory_cache:
+            cart_manager.memory_cache[user_id] = {}
+        current = cart_manager.memory_cache[user_id].get(product_id, 0)
+        cart_manager.memory_cache[user_id][product_id] = current + quantity
 
 def remove_from_cart(user_id: int, product_id: int):
-    return cart_manager.remove_from_cart(user_id, product_id)
+    """DEPRECATED: Используйте await cart_manager.remove_from_cart()"""
+    try:
+        return asyncio.run(cart_manager.remove_from_cart(user_id, product_id))
+    except RuntimeError:
+        if user_id in cart_manager.memory_cache:
+            cart_manager.memory_cache[user_id].pop(product_id, None)
 
 def clear_cart(user_id: int):
-    return cart_manager.clear_cart(user_id)
+    """DEPRECATED: Используйте await cart_manager.clear_cart()"""
+    try:
+        return asyncio.run(cart_manager.clear_cart(user_id))
+    except RuntimeError:
+        cart_manager.memory_cache.pop(user_id, None)
