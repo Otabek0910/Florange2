@@ -2,29 +2,48 @@ from aiogram import Router, types, F
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from sqlalchemy import select
+from sqlalchemy import select, and_, delete 
 
 from app.database.database import get_session
 from app.services import UserService, FloristService, ConsultationService
-from app.models import RoleEnum, ConsultationStatusEnum, Consultation, ConsultationMessage
+from app.models import (
+    RoleEnum, ConsultationStatusEnum, Consultation, 
+    ConsultationMessage, ConsultationBuffer, FloristReview
+)
 from app.translate import t
 from app.exceptions import ValidationError, UserNotFoundError
 import logging
-from datetime import datetime
-
-from aiogram.fsm.storage.base import StorageKey
+from datetime import datetime, timedelta
 import os
-from app.services.consultation_service import generate_request_key
 from app.config import settings
+
+# ✅ ИСПРАВЛЕНО: Правильный импорт архивного сервиса
+try:
+    from app.services.ai_archive_service import AIArchiveService
+except ImportError:
+    # Если сервис не готов, создаем заглушку
+    class AIArchiveService:
+        def __init__(self, bot):
+            self.bot = bot
+        async def archive_consultation_to_channel(self, consultation_id):
+            return None
+        async def restore_consultation_from_archive(self, chat_id, archive_id):
+            return False
 
 ARCHIVE_CHANNEL_ID = os.getenv("ARCHIVE_CHANNEL_ID")
 
 router = Router()
 
 class ConsultationStates(StatesGroup):
-    WAITING_RESPONSE = State()    # 🆕 Ожидание ответа флориста
-    CHATTING = State()           # Активная консультация  
+    WAITING_RESPONSE = State()    # Ожидание ответа флориста
+    CHATTING = State()           # Активная консультация 
     RATING = State()             # Оценка флориста
+
+# ✅ ИСПРАВЛЕНО: Добавлена функция генерации ключа идемпотентности
+def generate_request_key(client_id: int, florist_id: int) -> str:
+    """Генерирует ключ идемпотентности для запроса консультации"""
+    timestamp = int(datetime.utcnow().timestamp() // 60)  # Округляем до минут
+    return f"consult_{client_id}_{florist_id}_{timestamp}"
 
 async def _get_user_and_lang(session, tg_id: int):
     """Получить пользователя и язык"""
@@ -117,7 +136,7 @@ async def _show_florists_page(callback: types.CallbackQuery, state: FSMContext, 
             # Детальное описание в тексте
             text_lines.append(
                 f"🌸 <b>{user_obj.first_name}</b> {rating_text}\n"
-                f"📝 {specialization}\n"
+                f"📍 {specialization}\n"
                 f"{status_emoji} {status_text}\n"
             )
         
@@ -140,7 +159,7 @@ async def _show_florists_page(callback: types.CallbackQuery, state: FSMContext, 
 
 @router.callback_query(F.data.startswith("select_florist_"))
 async def select_florist(callback: types.CallbackQuery, state: FSMContext):
-    """Выбор флориста и ЗАПРОС консультации (pending статус)"""
+    """✅ ИСПРАВЛЕННЫЙ выбор флориста с идемпотентностью"""
     florist_id = int(callback.data.split("_")[2])
     
     async for session in get_session():
@@ -153,53 +172,93 @@ async def select_florist(callback: types.CallbackQuery, state: FSMContext):
         consultation_service = ConsultationService(session)
         
         try:
-            # 🆕 СОЗДАЕМ PENDING КОНСУЛЬТАЦИЮ (НЕ АКТИВНУЮ!)
-            consultation = await consultation_service.request_consultation(user.id, florist_id)
+            # ✅ ОЧИЩАЕМ любые старые состояния
+            await state.clear()
+            
+            # ✅ ЗАКРЫВАЕМ любые старые консультации этого клиента
+            old_consultations = await session.execute(
+                select(Consultation).where(
+                    and_(
+                        Consultation.client_id == user.id,
+                        Consultation.status.in_(['pending', 'active'])
+                    )
+                )
+            )
+            for old_consult in old_consultations.scalars():
+                old_consult.status = ConsultationStatusEnum.expired
+                old_consult.completed_at = datetime.utcnow()
+            
             await session.commit()
             
-            # Получаем имя флориста
+            # ✅ СОЗДАЕМ новую консультацию с идемпотентностью
+            request_key = generate_request_key(user.id, florist_id)
+            consultation = await consultation_service.request_consultation_idempotent(
+                user.id, florist_id, request_key
+            )
+            await session.commit()
+            
+            # ✅ УВЕДОМЛЯЕМ ФЛОРИСТА
             await session.refresh(consultation, ['florist'])
             florist_name = consultation.florist.first_name or "Флорист"
             
-            # 🆕 НОВОЕ СООБЩЕНИЕ для клиента - ожидание ответа
-            header_text = (
-                f"⏳ Ожидание ответа флориста {florist_name}\n\n"
-                f"💬 Можете писать сообщения - флорист получит их все сразу после принятия консультации"
+            try:
+                await callback.bot.send_message(
+                    int(consultation.florist.tg_id),
+                    f"🌸 Новый запрос на консультацию!\n\n"
+                    f"👤 Клиент: {user.first_name}\n"
+                    f"📱 Запрос #{consultation.id}\n\n"
+                    f"💡 Примите запрос чтобы начать консультацию",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="✅ Принять", callback_data=f"accept_consultation_{consultation.id}")],
+                        [types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decline_consultation_{consultation.id}")],
+                        [types.InlineKeyboardButton(text="📞 Номер клиента", callback_data=f"call_client_{consultation.id}")]
+                    ])
+                )
+            except Exception as e:
+                print(f"❌ Error notifying florist: {e}")
+            
+            # ✅ СООБЩЕНИЕ КЛИЕНТУ С ПРАВИЛЬНЫМИ КНОПКАМИ
+            client_message = await callback.message.edit_text(
+                f"⏳ Ожидаем ответа флориста {florist_name}\n\n"
+                f"💬 Можете писать сообщения — флорист получит их после принятия консультации\n\n"
+                f"🕕 Время ожидания: 15 минут",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="❌ Отменить запрос", callback_data=f"cancel_consultation_{consultation.id}")],
+                    [types.InlineKeyboardButton(text="📞 Номер флориста", callback_data=f"call_florist_{consultation.id}")],
+                    [types.InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")]
+                ])
             )
             
-            header_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(text="❌ Отменить запрос", callback_data=f"cancel_consultation_{consultation.id}"),
-                    types.InlineKeyboardButton(text="📞 Позвонить", callback_data=f"call_florist_{consultation.id}")
-                ]
-            ])
-            
-            # Отправляем и закрепляем header
-            header_msg = await callback.message.answer(header_text, reply_markup=header_kb)
-            await callback.bot.pin_chat_message(callback.message.chat.id, header_msg.message_id, disable_notification=True)
-            
-            # 🆕 УВЕДОМЛЯЕМ ФЛОРИСТА о ЗАПРОСЕ (НЕ об активной консультации!)
-            await _notify_florist_about_consultation_request(callback.bot, consultation, session)
-            
-            # Переводим клиента в режим ОЖИДАНИЯ (новое состояние)
+            # ✅ ЗАКРЕПЛЯЕМ сообщение и сохраняем ID
+            try:
+                await callback.bot.unpin_all_chat_messages(callback.message.chat.id)
+            except Exception:
+                pass
+
+            try:
+                await callback.bot.pin_chat_message(callback.message.chat.id, client_message.message_id, disable_notification=True)
+            except Exception:
+                pass  # Игнорируем ошибки закрепления
+
+            # ✅ ПЕРЕВОДИМ в состояние ожидания
             await state.set_state(ConsultationStates.WAITING_RESPONSE)
-            await state.update_data(consultation_id=consultation.id, header_message_id=header_msg.message_id)
+            await state.update_data(
+                consultation_id=consultation.id, 
+                header_message_id=client_message.message_id,
+                florist_name=florist_name
+            )
             
-            # Удаляем сообщение с выбором флориста
-            await callback.message.delete()
             await callback.answer()
             
         except ValidationError as e:
-            if "занят" in str(e):
-                await callback.answer("Флорист занят", show_alert=True)
-                await start_consultation_flow(callback, state)
-            else:
-                await callback.answer(str(e), show_alert=True)
+            await callback.answer(str(e), show_alert=True)
+        except Exception as e:
+            print(f"Select florist error: {e}")
+            await callback.answer("Произошла ошибка", show_alert=True)
 
 @router.message(ConsultationStates.CHATTING)
 async def handle_consultation_message(message: types.Message, state: FSMContext):
-    """Обработка сообщений в АКТИВНОЙ консультации"""
-    
+    """✅ ИСПРАВЛЕННАЯ обработка сообщений в активной консультации"""
     data = await state.get_data()
     consultation_id = data.get('consultation_id')
     
@@ -210,11 +269,9 @@ async def handle_consultation_message(message: types.Message, state: FSMContext)
     
     async for session in get_session():
         user, lang = await _get_user_and_lang(session, message.from_user.id)
-        consultation_service = ConsultationService(session)
         
         try:
-            # Проверяем что консультация активна
-            consultation = await consultation_service.consultation_repo.get(consultation_id)
+            consultation = await session.get(Consultation, consultation_id)
             
             if not consultation or consultation.status != ConsultationStatusEnum.active:
                 await message.answer("❌ Консультация неактивна")
@@ -223,46 +280,40 @@ async def handle_consultation_message(message: types.Message, state: FSMContext)
             
             await session.refresh(consultation, ['client', 'florist'])
             
-            # Определяем кому переслать сообщение
+            # ✅ ОПРЕДЕЛЯЕМ получателя
             if user.id == consultation.client_id:
-                # Сообщение от КЛИЕНТА → пересылаем ФЛОРИСТУ
                 recipient_tg_id = consultation.florist.tg_id
-                sender_name = consultation.client.first_name or "Клиент"
-                sender_role = "👤 Клиент"
+                sender_name = consultation.client.first_name
             elif user.id == consultation.florist_id:
-                # Сообщение от ФЛОРИСТА → пересылаем КЛИЕНТУ  
                 recipient_tg_id = consultation.client.tg_id
-                sender_name = consultation.florist.first_name or "Флорист"
-                sender_role = "🌸 Флорист"
+                sender_name = consultation.florist.first_name
             else:
                 await message.answer("❌ Вы не участвуете в этой консультации")
                 return
             
-            # ✅ ОСНОВНОЕ ИСПРАВЛЕНИЕ: Пересылаем сообщение получателю
+            # ✅ СОХРАНЯЕМ сообщение в БД
+            consultation_msg = ConsultationMessage(
+                consultation_id=consultation_id,
+                sender_id=user.id,
+                message_text=message.text or "",
+                photo_file_id=message.photo[-1].file_id if message.photo else None
+            )
+            session.add(consultation_msg)
+            await session.commit()
+            
+            # ✅ ПЕРЕСЫЛАЕМ сообщение
             try:
-                # Формируем текст с указанием отправителя
-                forwarded_text = f"{sender_role} {sender_name}:\n{message.text}"
-                
-                # Пересылаем получателю
                 if message.photo:
-                    await message.copy_to(
+                    await message.bot.send_photo(
                         chat_id=int(recipient_tg_id),
-                        caption=f"{sender_role} {sender_name}"
+                        photo=message.photo[-1].file_id,
+                        caption=f"💬 {sender_name}: {message.caption or ''}"
                     )
                 else:
-                    await message.copy_to(
-                        chat_id=int(recipient_tg_id),
-                        reply_markup=None
-                    )
-                    # Добавляем подпись отправителя отдельным сообщением
                     await message.bot.send_message(
                         chat_id=int(recipient_tg_id),
-                        text=f"↑ {sender_role} {sender_name}"
+                        text=f"💬 {sender_name}: {message.text}"
                     )
-                
-                # Подтверждаем отправителю
-                await message.react([types.ReactionTypeEmoji(emoji="✅")])
-                
             except Exception as e:
                 print(f"Error forwarding message: {e}")
                 await message.answer("❌ Ошибка доставки сообщения")
@@ -273,15 +324,14 @@ async def handle_consultation_message(message: types.Message, state: FSMContext)
 
 @router.callback_query(F.data.startswith("end_consultation_"))
 async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
-    """✅ ИСПРАВЛЕННОЕ завершение консультации"""
+    """✅ ИСПРАВЛЕННОЕ завершение консультации с архивированием"""
     consultation_id = int(callback.data.split("_")[2])
     
     async for session in get_session():
         user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        consultation_service = ConsultationService(session)
         
         try:
-            consultation = await consultation_service.consultation_repo.get(consultation_id)
+            consultation = await session.get(Consultation, consultation_id)
             if not consultation:
                 await callback.answer("❌ Консультация не найдена", show_alert=True)
                 return
@@ -293,113 +343,380 @@ async def end_consultation(callback: types.CallbackQuery, state: FSMContext):
                 await callback.answer("❌ Вы не участвуете в этой консультации", show_alert=True)
                 return
             
-            if consultation.status != ConsultationStatusEnum.active:
-                await callback.answer("❌ Консультация уже завершена", show_alert=True)
-                return
-            
-            # ✅ ИСПРАВЛЕНИЕ: Завершаем консультацию корректно
-            await consultation_service.complete_consultation(consultation_id, user.id)
+            # Завершаем консультацию
+            consultation.status = ConsultationStatusEnum.completed
+            consultation.completed_at = datetime.utcnow()
             await session.commit()
             
-            # Определяем кто завершил и кому уведомить
-            if user.id == consultation.client_id:
-                # ✅ КЛИЕНТ завершил - предлагаем оценить флориста
-                await callback.message.edit_text(
-                    f"✅ Консультация завершена!\n\n"
-                    f"🌟 Оцените работу флориста {consultation.florist.first_name}:",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            types.InlineKeyboardButton(text="⭐", callback_data=f"rate_florist_{consultation_id}_1"),
-                            types.InlineKeyboardButton(text="⭐⭐", callback_data=f"rate_florist_{consultation_id}_2"),
-                            types.InlineKeyboardButton(text="⭐⭐⭐", callback_data=f"rate_florist_{consultation_id}_3")
-                        ],
-                        [
-                            types.InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data=f"rate_florist_{consultation_id}_4"),
-                            types.InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data=f"rate_florist_{consultation_id}_5")
-                        ],
-                        [types.InlineKeyboardButton(text="🚫 Пропустить", callback_data=f"skip_rating_{consultation_id}")]
-                    ])
-                )
-                
-                # Переводим клиента в состояние оценки
-                await state.set_state(ConsultationStates.RATING)
-                await state.update_data(consultation_id=consultation_id)
-                
-                other_user = consultation.florist
-                other_role = "флористу"
-                ender_name = consultation.client.first_name or "Клиент"
-                
-            else:
-                # ФЛОРИСТ завершил - обычное завершение
-                ender_name = consultation.florist.first_name or "Флорист"
-                other_user = consultation.client
-                other_role = "клиенту"
-                
-                await callback.message.edit_text(
-                    f"✅ Консультация завершена.\n"
-                    f"Спасибо за работу! 🌸",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
-                    ])
-                )
-            
-            # ✅ ИСПРАВЛЕНИЕ: Уведомляем ДРУГОГО участника (не удаляем у него сообщения)
+            # ✅ АРХИВИРУЕМ консультацию
             try:
-                await callback.bot.send_message(
-                    chat_id=int(other_user.tg_id),
-                    text=f"✅ Консультация завершена {other_role} {ender_name}.\n"
-                         f"Спасибо за использование нашего сервиса! 🌸",
+                ai_service = AIArchiveService(callback.bot)
+                archive_id = await ai_service.archive_consultation_to_channel(consultation.id)
+                
+                if archive_id:
+                    consultation.archive_id = archive_id
+                    await session.commit()
+                    print(f"✅ Consultation {consultation.id} archived with ID: {archive_id}")
+                else:
+                    print(f"❌ Failed to archive consultation {consultation.id}")
+            except Exception as e:
+                print(f"Archive error: {e}")
+
+            # ✅ ОЧИЩАЕМ состояние
+            await state.clear()
+            
+            # ✅ КРАСИВОЕ завершение для инициатора
+            if user.id == consultation.client_id:
+                await callback.message.edit_text(
+                    "✅ Консультация завершена\n\n"
+                    "🌸 Спасибо за обращение в Florange!\n"
+                    "👍 Будем рады видеть вас снова",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
+                        [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+                        [types.InlineKeyboardButton(text="🔍 Новая консультация", callback_data="consultation_start")]
                     ])
                 )
                 
-                # ✅ ИСПРАВЛЕНИЕ: Очищаем состояния FSM у ОБОИХ участников
-                from aiogram.fsm.storage.base import StorageKey
-                
-                # Очищаем состояние инициатора
-                initiator_key = StorageKey(
-                    bot_id=callback.bot.id, 
-                    chat_id=int(user.tg_id), 
-                    user_id=int(user.tg_id)
-                )
-                
-                # Очищаем состояние другого участника
-                other_key = StorageKey(
-                    bot_id=callback.bot.id, 
-                    chat_id=int(other_user.tg_id), 
-                    user_id=int(other_user.tg_id)
-                )
-                
-                # Получаем storage из callback
-                if hasattr(callback.bot, 'session') and hasattr(callback.bot.session, 'storage'):
-                    storage = callback.bot.session.storage
-                elif hasattr(callback, 'bot') and hasattr(callback.bot, '_session') and hasattr(callback.bot._session, 'storage'):
-                    storage = callback.bot._session.storage
-                else:
-                    # Fallback - очищаем через state
-                    await state.clear()
-                    print("⚠️ Storage not accessible, cleared local state only")
+                # Уведомляем флориста
+                try:
+                    await callback.bot.send_message(
+                        int(consultation.florist.tg_id),
+                        f"ℹ️ Клиент {consultation.client.first_name} завершил консультацию.\n"
+                        f"✅ Консультация #{consultation_id} закрыта."
+                    )
+                except Exception:
+                    pass
                     
-                if 'storage' in locals():
-                    try:
-                        await storage.set_state(initiator_key, None)
-                        await storage.set_state(other_key, None)
-                        print(f"✅ Cleared FSM states for both participants")
-                    except Exception as e:
-                        print(f"Storage clear error: {e}")
-                        await state.clear()  # Fallback
-                        
-            except Exception as e:
-                print(f"Error notifying other participant: {e}")
+            else:
+                await callback.message.edit_text(
+                    "✅ Консультация завершена\n\n"
+                    "👍 Хорошей работы!",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+                    ])
+                )
+                
+                # Уведомляем клиента
+                try:
+                    await callback.bot.send_message(
+                        int(consultation.client.tg_id),
+                        f"✅ Консультация завершена\n\n"
+                        f"🌸 Флорист {consultation.florist.first_name} завершил консультацию.\n"
+                        f"👍 Спасибо за обращение в Florange!",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                            [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+                            [types.InlineKeyboardButton(text="🔍 Новая консультация", callback_data="consultation_start")]
+                        ])
+                    )
+                except Exception:
+                    pass
             
-            await callback.answer("✅ Консультация завершена")
+            await callback.answer("Консультация завершена")
+            
+        except Exception as e:
+            print(f"End consultation error: {e}")
+            await callback.answer("Произошла ошибка", show_alert=True)
+
+@router.message(ConsultationStates.WAITING_RESPONSE)
+async def handle_waiting_messages(message: types.Message, state: FSMContext):
+    """✅ ИСПРАВЛЕННАЯ обработка сообщений в ожидании"""
+    data = await state.get_data()
+    consultation_id = data.get('consultation_id')
+    
+    if not consultation_id:
+        await message.answer("❌ Консультация не найдена")
+        await state.clear()
+        return
+    
+    async for session in get_session():
+        user, lang = await _get_user_and_lang(session, message.from_user.id)
+        
+        try:
+            consultation = await session.get(Consultation, consultation_id)
+            
+            if not consultation:
+                await message.answer("❌ Консультация не найдена")
+                await state.clear()
+                return
+            
+            # ✅ ПРОВЕРЯЕМ статус и переводим в активный чат если нужно
+            if consultation.status == ConsultationStatusEnum.active:
+                # Если пользователь еще в состоянии WAITING_RESPONSE, переводим в CHATTING
+                current_state = await state.get_state()
+                if current_state == ConsultationStates.WAITING_RESPONSE.state:
+                    await state.set_state(ConsultationStates.CHATTING)
+                    await state.update_data(consultation_id=consultation_id)
+                    await handle_consultation_message(message, state)
+                    return
+            
+            if consultation.status != ConsultationStatusEnum.pending:
+                await message.answer("❌ Консультация больше неактивна")
+                await state.clear()
+                return
+            
+            # ✅ СОХРАНЯЕМ сообщение в буфер
+            buffer_msg = ConsultationBuffer(
+                consultation_id=consultation_id,
+                sender_id=user.id,
+                message_text=message.text or "",
+                photo_file_id=message.photo[-1].file_id if message.photo else None
+            )
+            session.add(buffer_msg)
+            await session.commit()
+            
+            # ✅ ПОДТВЕРЖДЕНИЕ сохранения
+            await message.answer("📝 Сообщение сохранено. Флорист получит его после принятия консультации.")
+            
+        except Exception as e:
+            print(f"Waiting message error: {e}")
+            await message.answer("❌ Ошибка сохранения сообщения")
+
+@router.callback_query(F.data.startswith("accept_consultation_"))
+async def accept_consultation_handler(callback: types.CallbackQuery):
+    """✅ ПРИНЯТИЕ консультации флористом"""
+    consultation_id = int(callback.data.split("_")[2])
+    
+    async for session in get_session():
+        user, lang = await _get_user_and_lang(session, callback.from_user.id)
+        consultation_service = ConsultationService(session)
+        
+        try:
+            # Принимаем консультацию
+            consultation = await consultation_service.accept_consultation(consultation_id, user.id)
+            await session.commit()
+            
+            await session.refresh(consultation, ['client', 'florist'])
+            
+            # ✅ ДОСТАВЛЯЕМ буферные сообщения ФЛОРИСТУ
+            await _deliver_buffered_messages_to_florist(callback.bot, consultation_id, session)
+            
+            # Обновляем интерфейс флориста
+            await callback.message.edit_text(
+                f"✅ Консультация с {consultation.client.first_name} начата!\n\n"
+                f"💬 Теперь вы можете общаться напрямую",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="📚 Завершить консультацию", callback_data=f"end_consultation_{consultation_id}")],
+                    [types.InlineKeyboardButton(text="📞 Номер клиента", callback_data=f"call_client_{consultation_id}")]
+                ])
+            )
+            
+            # ✅ УВЕДОМЛЯЕМ клиента И ОБНОВЛЯЕМ ЕГО ИНТЕРФЕЙС
+            try:
+                client_chat_id = int(consultation.client.tg_id)
+                
+                # Отправляем новое сообщение клиенту
+                new_message = await callback.bot.send_message(
+                    chat_id=client_chat_id,
+                    text=f"✅ Флорист {consultation.florist.first_name} принял консультацию!\n\n"
+                         f"💬 Теперь можете общаться напрямую",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="📚 Завершить консультацию", callback_data=f"end_consultation_{consultation_id}")],
+                        [types.InlineKeyboardButton(text="📞 Номер флориста", callback_data=f"call_florist_{consultation_id}")]
+                    ])
+                )
+                
+                # Закрепляем новое сообщение
+                try:
+                    await callback.bot.pin_chat_message(client_chat_id, new_message.message_id, disable_notification=True)
+                except Exception:
+                    pass
+                
+            except Exception as e:
+                print(f"Error updating client interface: {e}")
+            
+            await callback.answer("Консультация принята!")
             
         except ValidationError as e:
             await callback.answer(str(e), show_alert=True)
         except Exception as e:
-            print(f"End consultation error: {e}")
-            await callback.answer("❌ Ошибка завершения консультации", show_alert=True)
+            print(f"Accept consultation error: {e}")
+            await callback.answer("Произошла ошибка", show_alert=True)
+
+async def _deliver_buffered_messages_to_florist(bot, consultation_id: int, session):
+    """✅ ПРАВИЛЬНАЯ доставка буферных сообщений флористу"""
+    
+    # Получаем консультацию для флориста
+    consultation = await session.get(Consultation, consultation_id)
+    if not consultation:
+        return
+        
+    await session.refresh(consultation, ['client', 'florist'])
+    
+    # Получаем буферные сообщения
+    buffer_query = select(ConsultationBuffer).where(
+        ConsultationBuffer.consultation_id == consultation_id
+    ).order_by(ConsultationBuffer.created_at)
+    
+    result = await session.execute(buffer_query)
+    buffered_messages = result.scalars().all()
+    
+    if not buffered_messages:
+        return
+    
+    print(f"📬 Delivering {len(buffered_messages)} buffered messages to florist")
+    
+    # ✅ ДОСТАВЛЯЕМ каждое сообщение флористу
+    try:
+        for msg in buffered_messages:
+            await session.refresh(msg, ['sender'])
+            sender_name = msg.sender.first_name or "Клиент"
+            
+            if msg.photo_file_id:
+                await bot.send_photo(
+                    chat_id=int(consultation.florist.tg_id),
+                    photo=msg.photo_file_id,
+                    caption=f"📝 {sender_name} (из буфера): {msg.message_text or ''}"
+                )
+            else:
+                await bot.send_message(
+                    chat_id=int(consultation.florist.tg_id),
+                    text=f"📝 {sender_name} (из буфера): {msg.message_text}"
+                )
+    
+        # Уведомляем о количестве доставленных сообщений
+        if len(buffered_messages) > 0:
+            await bot.send_message(
+                chat_id=int(consultation.florist.tg_id),
+                text=f"📬 Доставлено {len(buffered_messages)} сообщений из буфера"
+            )
+    
+    except Exception as e:
+        print(f"Error delivering buffered messages: {e}")
+    
+    # Удаляем буферные сообщения
+    await session.execute(
+        delete(ConsultationBuffer)
+        .where(ConsultationBuffer.consultation_id == consultation_id)
+    )
+    
+    print(f"🗑️ Cleared {len(buffered_messages)} buffered messages from buffer")
+
+@router.callback_query(F.data.startswith("decline_consultation_"))
+async def decline_consultation_handler(callback: types.CallbackQuery):
+    """✅ ИСПРАВЛЕННОЕ отклонение консультации флористом"""
+    consultation_id = int(callback.data.split("_")[2])
+    
+    async for session in get_session():
+        user, lang = await _get_user_and_lang(session, callback.from_user.id)
+        consultation_service = ConsultationService(session)
+        
+        try:
+            consultation = await consultation_service.decline_consultation(consultation_id, user.id)
+            await session.commit()
+            
+            await session.refresh(consultation, ['client', 'florist'])
+            
+            # Обновляем сообщение флориста
+            await callback.message.edit_text(
+                "❌ Консультация отклонена\n\n"
+                "ℹ️ Клиент будет уведомлён",
+                reply_markup=None
+            )
+            
+            # Уведомляем клиента
+            try:
+                await callback.bot.send_message(
+                    chat_id=int(consultation.client.tg_id),
+                    text=f"😔 Флорист {consultation.florist.first_name} не может принять консультацию\n\n"
+                         f"🌸 Попробуйте выбрать другого флориста",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="🔍 Выбрать флориста", callback_data="consultation_start")],
+                        [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
+                    ])
+                )
+            except Exception as e:
+                print(f"Error notifying client about decline: {e}")
+            
+            await callback.answer("Консультация отклонена")
+            
+        except ValidationError as e:
+            await callback.answer(str(e), show_alert=True)
+        except Exception as e:
+            print(f"Decline consultation error: {e}")
+            await callback.answer("Произошла ошибка", show_alert=True)
+
+@router.callback_query(F.data.startswith("cancel_consultation_"))
+async def cancel_consultation_request(callback: types.CallbackQuery, state: FSMContext):
+    """✅ ИСПРАВЛЕННАЯ отмена консультации"""
+    consultation_id = int(callback.data.split("_")[2])
+    
+    async for session in get_session():
+        user, lang = await _get_user_and_lang(session, callback.from_user.id)
+        
+        try:
+            consultation = await session.get(Consultation, consultation_id)
+            
+            if not consultation or consultation.client_id != user.id:
+                await callback.answer("Консультация не найдена", show_alert=True)
+                return
+            
+            # Отменяем консультацию
+            consultation.status = ConsultationStatusEnum.expired
+            consultation.completed_at = datetime.utcnow()
+            await session.commit()
+            
+            # Очищаем состояние
+            await state.clear()
+            
+            await callback.message.edit_text(
+                "❌ Запрос на консультацию отменён\n\n"
+                "🌸 Обращайтесь к нам в любое время!",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+                    [types.InlineKeyboardButton(text="🔍 Новая консультация", callback_data="consultation_start")]
+                ])
+            )
+            await callback.answer("Запрос отменён")
+            
+        except Exception as e:
+            print(f"Cancel consultation error: {e}")
+            await callback.answer("Произошла ошибка", show_alert=True)
+
+@router.callback_query(F.data.startswith("call_florist_"))
+async def call_florist(callback: types.CallbackQuery):
+    """✅ ИСПРАВЛЕННЫЙ запрос номера флориста"""
+    consultation_id = int(callback.data.split("_")[2])
+    
+    async for session in get_session():
+        consultation = await session.get(Consultation, consultation_id)
+        if not consultation:
+            await callback.answer("Консультация не найдена", show_alert=True)
+            return
+            
+        await session.refresh(consultation, ['florist'])
+        florist_phone = consultation.florist.phone or "Не указан"
+        
+        await callback.bot.send_message(
+            callback.from_user.id,
+            f"📞 Номер флориста {consultation.florist.first_name}:\n\n"
+            f"`{florist_phone}`\n\n"
+            f"💡 Нажмите на номер чтобы скопировать",
+            parse_mode="Markdown"
+        )
+        await callback.answer("Номер отправлен")
+
+@router.callback_query(F.data.startswith("call_client_"))
+async def call_client(callback: types.CallbackQuery):
+    """✅ ИСПРАВЛЕННЫЙ запрос номера клиента"""
+    consultation_id = int(callback.data.split("_")[2])
+    
+    async for session in get_session():
+        consultation = await session.get(Consultation, consultation_id)
+        if not consultation:
+            await callback.answer("Консультация не найдена", show_alert=True)
+            return
+            
+        await session.refresh(consultation, ['client'])
+        client_phone = consultation.client.phone or "Не указан"
+        
+        await callback.bot.send_message(
+            callback.from_user.id,
+            f"📞 Номер клиента {consultation.client.first_name}:\n\n"
+            f"`{client_phone}`\n\n"
+            f"💡 Нажмите на номер чтобы скопировать",
+            parse_mode="Markdown"
+        )
+        await callback.answer("Номер отправлен")
 
 @router.callback_query(F.data == "consultation_history")
 async def show_consultation_history(callback: types.CallbackQuery):
@@ -412,7 +729,6 @@ async def show_consultation_history(callback: types.CallbackQuery):
             return
         
         # Получаем завершенные консультации пользователя
-        consultation_service = ConsultationService(session)
         result = await session.execute(
             select(Consultation)
             .where(
@@ -496,102 +812,33 @@ async def view_consultation_archive(callback: types.CallbackQuery):
         
         # Пока простое восстановление - в будущем из архивного канала
         if consultation.archive_id:
-            from app.services.ai_archive_service import AIArchiveService
-            ai_service = AIArchiveService(callback.bot)
-            success = await ai_service.restore_consultation_from_archive(
-                callback.message.chat.id, 
-                consultation.archive_id
-            )
+            try:
+                ai_service = AIArchiveService(callback.bot)
+                success = await ai_service.restore_consultation_from_archive(
+                    callback.message.chat.id, 
+                    consultation.archive_id
+                )
+                
+                if success:
+                    await callback.answer("📖 Архив восстановлен")
+                else:
+                    await callback.message.edit_text(
+                        "📝 Архив этой консультации недоступен\n"
+                        "Возможно, консультация была завершена до внедрения системы архивирования."
+                    )
+            except Exception as e:
+                print(f"Archive restore error: {e}")
+                await callback.message.edit_text(
+                    "📝 Ошибка восстановления архива\n"
+                    "Обратитесь к администратору."
+                )
         else:
             await callback.message.edit_text(
-                "📁 Архив этой консультации не найден\n"
+                "📝 Архив этой консультации не найден\n"
                 "Возможно, консультация была завершена до внедрения системы архивирования."
             )
         
         await callback.answer()
-
-@router.callback_query(F.data.startswith("call_florist_"))
-async def request_call_florist(callback: types.CallbackQuery):
-    """Запрос звонка флористу"""
-    consultation_id = int(callback.data.split("_")[2])
-    
-    async for session in get_session():
-        user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        
-        if not user:
-            await callback.answer("Пользователь не найден", show_alert=True)
-            return
-        
-        # Получаем консультацию
-        consultation_service = ConsultationService(session)
-        consultation_data = await consultation_service.get_consultation_with_participants(consultation_id)
-        
-        if not consultation_data:
-            await callback.answer("Консультация не найдена", show_alert=True)
-            return
-        
-        consultation = consultation_data['consultation']
-        client = consultation_data['client']
-        florist = consultation_data['florist']
-        
-        # Отправляем запрос флористу с номером клиента
-        client_phone = client.phone or "Не указан"
-        call_request_text = t(lang, "call_request_received", name=client.first_name, phone=client_phone)
-        
-        # Кнопка для набора номера (работает на мобильных)
-        clean_phone = client_phone.replace("+", "") if client_phone != "Не указан" else ""
-        call_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=f"📞 Набрать {client_phone}", url=f"tel:{clean_phone}")]
-        ]) if client_phone != "Не указан" else None
-        try:
-            await callback.bot.send_message(
-                int(florist.tg_id), 
-                call_request_text, 
-                reply_markup=call_kb
-            )
-            await callback.answer(t(lang, "call_request_sent"))
-        except Exception as e:
-            await callback.answer("Ошибка отправки запроса", show_alert=True)
-            print(f"Error sending call request: {e}")
-
-@router.callback_query(F.data.startswith("respond_consultation_"))
-async def florist_respond_consultation(callback: types.CallbackQuery, state: FSMContext):
-    """Флорист отвечает на консультацию"""
-    consultation_id = int(callback.data.split("_")[2])
-    
-    async for session in get_session():
-        user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        consultation_service = ConsultationService(session)
-        
-        if not user or user.role not in [RoleEnum.florist, RoleEnum.owner]:
-            await callback.answer("Доступ запрещен", show_alert=True)
-            return
-        
-        # Проверяем что консультация активна и флорист участвует
-        consultation = await consultation_service.consultation_repo.get(consultation_id)
-        if not consultation or consultation.florist_id != user.id:
-            await callback.answer("Консультация не найдена", show_alert=True)
-            return
-        
-        if consultation.status != ConsultationStatusEnum.active:
-            await callback.answer("Консультация уже завершена", show_alert=True)
-            return
-        
-        # Переводим флориста в режим чата
-        await state.set_state(ConsultationStates.CHATTING)
-        await state.update_data(consultation_id=consultation_id, client_id=consultation.client_id)
-        
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🔚 Завершить консультацию", callback_data=f"end_consultation_{consultation_id}")]
-        ])
-        
-        await callback.message.edit_text(
-            "💬 Вы подключены к консультации! Напишите ответ клиенту:",
-            reply_markup=kb
-        )
-        await callback.answer()
-
-# Обработчик сообщений флориста в консультации убираем - теперь универсальный выше
 
 @router.callback_query(F.data.startswith("rate_florist_"))
 async def rate_florist(callback: types.CallbackQuery, state: FSMContext):
@@ -618,7 +865,6 @@ async def rate_florist(callback: types.CallbackQuery, state: FSMContext):
                 return
             
             # Проверяем нет ли уже оценки
-            from app.models import FloristReview
             existing_review = await session.execute(
                 select(FloristReview).where(FloristReview.consultation_id == consultation_id)
             )
@@ -700,38 +946,6 @@ async def skip_rating(callback: types.CallbackQuery, state: FSMContext):
             print(f"Skip rating error: {e}")
             await callback.answer("❌ Ошибка", show_alert=True)
 
-
-async def _update_florist_rating(session, florist_id: int):
-    """Обновление общего рейтинга флориста"""
-    from app.models import FloristReview, FloristProfile
-    from sqlalchemy import func
-    
-    # Вычисляем средний рейтинг и количество отзывов
-    result = await session.execute(
-        select(
-            func.avg(FloristReview.rating).label('avg_rating'),
-            func.count(FloristReview.id).label('reviews_count')
-        ).where(FloristReview.florist_id == florist_id)
-    )
-    
-    stats = result.first()
-    avg_rating = float(stats.avg_rating) if stats.avg_rating else 0.0
-    reviews_count = stats.reviews_count if stats.reviews_count else 0
-    
-    # Обновляем профиль флориста
-    florist_profile = await session.execute(
-        select(FloristProfile).where(FloristProfile.user_id == florist_id)
-    )
-    profile = florist_profile.scalar_one_or_none()
-    
-    if profile:
-        profile.rating = round(avg_rating, 2)
-        profile.reviews_count = reviews_count
-        profile.updated_at = datetime.utcnow()
-    
-    print(f"Updated florist {florist_id} rating: {avg_rating:.2f} ({reviews_count} reviews)")
-
-
 # 🆕 ДОБАВЬТЕ обработчик для состояния RATING (если клиент пишет текст вместо кнопок)
 @router.message(ConsultationStates.RATING)
 async def handle_rating_state_message(message: types.Message, state: FSMContext):
@@ -760,322 +974,32 @@ async def handle_rating_state_message(message: types.Message, state: FSMContext)
         await state.clear()
         await message.answer("❌ Ошибка состояния. Начните заново.")
 
-
-# Вспомогательные функции
-async def _notify_florist_about_consultation_request(bot, consultation, session):
-    """🆕 Уведомить флориста о ЗАПРОСЕ консультации (не активной!)"""
-    try:
-        await session.refresh(consultation, ['client', 'florist'])
-        client = consultation.client
-        florist = consultation.florist
-        
-        text = (
-            f"🌸 Запрос на консультацию!\n\n"
-            f"👤 Клиент: {client.first_name}\n"
-            f"📱 Запрос #{consultation.id}\n\n"
-            f"💡 Примите запрос чтобы начать консультацию"
-        )
-        
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="✅ Принять", callback_data=f"accept_consultation_{consultation.id}")],
-            [types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"decline_consultation_{consultation.id}")],
-            [types.InlineKeyboardButton(text="📞 Позвонить клиенту", callback_data=f"call_client_{consultation.id}")]
-        ])
-        
-        await bot.send_message(int(florist.tg_id), text, reply_markup=kb)
-        print(f"✅ Consultation request sent to florist {florist.tg_id}")
-    except Exception as e:
-        print(f"❌ Error notifying florist: {e}")
-
-@router.callback_query(F.data.startswith("accept_consultation_"))
-async def accept_consultation_handler(callback: types.CallbackQuery):
-    """🆕 Принятие консультации с доставкой буферных сообщений"""
-    consultation_id = int(callback.data.split("_")[2])
+async def _update_florist_rating(session, florist_id: int):
+    """Обновление общего рейтинга флориста"""
+    from sqlalchemy import func
+    from app.models import FloristProfile
     
-    async for session in get_session():
-        user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        consultation_service = ConsultationService(session)
-        
-        try:
-            # 🆕 Принимаем консультацию (с проверками и доставкой буфера)
-            consultation = await consultation_service.accept_consultation(consultation_id, user.id)
-            
-            await session.refresh(consultation, ['client', 'florist'])
-            
-            # Уведомляем клиента о принятии
-            try:
-                await callback.bot.send_message(
-                    chat_id=int(consultation.client.tg_id),
-                    text=f"✅ Флорист {consultation.florist.first_name} принял вашу консультацию!\n"
-                         f"Теперь вы можете общаться напрямую.\n\n"
-                         f"Для завершения консультации используйте /end_consultation",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(text="📞 Позвонить флористу", callback_data=f"call_florist_{consultation.id}")],
-                        [types.InlineKeyboardButton(text="❌ Завершить консультацию", callback_data=f"end_consultation_{consultation.id}")]
-                    ])
-                )
-                
-                # 🆕 Переводим клиента в состояние CHATTING
-                from aiogram.fsm.storage.base import StorageKey
-                storage_key = StorageKey(bot_id=callback.bot.id, chat_id=int(consultation.client.tg_id), user_id=int(consultation.client.tg_id))
-                await callback.bot.fsm.storage.set_state(key=storage_key, state=ConsultationStates.CHATTING)
-                await callback.bot.fsm.storage.update_data(key=storage_key, data={'consultation_id': consultation.id})
-                
-            except Exception as e:
-                print(f"Error notifying client: {e}")
-            
-            # Обновляем сообщение флориста
-            await callback.message.edit_text(
-                f"✅ Консультация принята!\n"
-                f"Клиент: {consultation.client.first_name}\n"
-                f"Теперь вы можете общаться напрямую.",
-                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="❌ Завершить консультацию", callback_data=f"end_consultation_{consultation.id}")]
-                ])
-            )
-            
-            await callback.answer("Консультация принята!")
-            
-        except ValidationError as e:
-            await callback.answer(str(e), show_alert=True)
-            
-            # Обновляем сообщение при ошибке
-            if "истекла" in str(e):
-                await callback.message.edit_text(
-                    "❌ Консультация истекла (прошло более 15 минут)",
-                    reply_markup=None
-                )
-            else:
-                await callback.message.edit_text(
-                    f"❌ Ошибка: {str(e)}",
-                    reply_markup=None
-                )
-        
-        except Exception as e:
-            print(f"Accept consultation error: {e}")
-            await callback.answer("Произошла ошибка", show_alert=True)
-
-@router.callback_query(F.data.startswith("decline_consultation_"))
-async def decline_consultation_handler(callback: types.CallbackQuery):
-    """🆕 Отклонение консультации с очисткой буфера"""
-    consultation_id = int(callback.data.split("_")[2])
+    # Вычисляем средний рейтинг и количество отзывов
+    result = await session.execute(
+        select(
+            func.avg(FloristReview.rating).label('avg_rating'),
+            func.count(FloristReview.id).label('reviews_count')
+        ).where(FloristReview.florist_id == florist_id)
+    )
     
-    async for session in get_session():
-        user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        consultation_service = ConsultationService(session)
-        
-        try:
-            # 🆕 Отклоняем консультацию (с очисткой буфера)
-            consultation = await consultation_service.decline_consultation(consultation_id, user.id)
-            
-            await session.refresh(consultation, ['client', 'florist'])
-            
-            # Уведомляем клиента об отклонении
-            try:
-                await callback.bot.send_message(
-                    chat_id=int(consultation.client.tg_id),
-                    text=f"😔 Флорист {consultation.florist.first_name} не может принять консультацию.\n"
-                         f"Попробуйте выбрать другого флориста.",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(text="🌸 Выбрать другого флориста", callback_data="consultation_start")],
-                        [types.InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
-                    ])
-                )
-                
-                # 🆕 Очищаем состояние клиента
-                from aiogram.fsm.storage.base import StorageKey
-                storage_key = StorageKey(bot_id=callback.bot.id, chat_id=int(consultation.client.tg_id), user_id=int(consultation.client.tg_id))
-                await callback.bot.fsm.storage.set_state(key=storage_key, state=None)
-                
-            except Exception as e:
-                print(f"Error notifying client about decline: {e}")
-            
-            # Обновляем сообщение флориста
-            await callback.message.edit_text(
-                "❌ Консультация отклонена.",
-                reply_markup=None
-            )
-            
-            await callback.answer("Консультация отклонена")
-            
-        except ValidationError as e:
-            await callback.answer(str(e), show_alert=True)
-        except Exception as e:
-            print(f"Decline consultation error: {e}")
-            await callback.answer("Произошла ошибка", show_alert=True)
-
-@router.message(ConsultationStates.WAITING_RESPONSE)
-async def handle_waiting_messages_improved(message: types.Message, state: FSMContext):
-    """🆕 Улучшенная обработка сообщений в режиме ожидания"""
-    data = await state.get_data()
-    consultation_id = data.get('consultation_id')
+    stats = result.first()
+    avg_rating = float(stats.avg_rating) if stats.avg_rating else 0.0
+    reviews_count = stats.reviews_count if stats.reviews_count else 0
     
-    if not consultation_id:
-        await message.answer("❌ Консультация не найдена")
-        await state.clear()
-        return
+    # Обновляем профиль флориста
+    florist_profile = await session.execute(
+        select(FloristProfile).where(FloristProfile.user_id == florist_id)
+    )
+    profile = florist_profile.scalar_one_or_none()
     
-    async for session in get_session():
-        user, lang = await _get_user_and_lang(session, message.from_user.id)
-        consultation_service = ConsultationService(session)
-        
-        try:
-            # Проверяем статус консультации
-            consultation = await session.get(Consultation, consultation_id)
-            
-            if not consultation:
-                await message.answer("❌ Консультация не найдена")
-                await state.clear()
-                return
-            
-            if consultation.status == ConsultationStatusEnum.active:
-                # Консультация уже активна - переводим в режим чата
-                await state.set_state(ConsultationStates.CHATTING)
-                await handle_consultation_message(message, state)
-                return
-            
-            if consultation.status != ConsultationStatusEnum.pending:
-                await message.answer("❌ Консультация больше неактивна")
-                await state.clear()
-                return
-            
-            # Проверяем таймаут
-            if consultation.expires_at and consultation.expires_at < datetime.utcnow():
-                consultation.status = ConsultationStatusEnum.expired
-                await session.commit()
-                await message.answer(
-                    "⏰ Время ожидания истекло (15 минут).\n"
-                    "Попробуйте выбрать другого флориста.",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(text="🌸 Выбрать флориста", callback_data="consultation_start")]
-                    ])
-                )
-                await state.clear()
-                return
-            
-            # 🆕 Добавляем сообщение в буфер с улучшенной обработкой
-            await consultation_service.add_buffered_message(
-                consultation_id, 
-                user.id, 
-                message.text,
-                message.photo[-1].file_id if message.photo else None
-            )
-            
-            # ✅ ИСПРАВЛЕНИЕ: Убираем проблемную реакцию, оставляем простое подтверждение
-            # await message.react([types.ReactionTypeEmoji(emoji="💌")])  # ❌ УБРАЛИ
-            
-            # Периодически напоминаем о статусе
-            import random
-            if random.randint(1, 3) == 1:  # 33% вероятность
-                remaining_minutes = max(0, int((consultation.expires_at - datetime.utcnow()).total_seconds() / 60))
-                await message.answer(
-                    f"💌 Сообщение сохранено. Флорист получит его после принятия консультации.\n"
-                    f"⏱ Осталось времени: {remaining_minutes} мин.",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(text="❌ Отменить запрос", callback_data=f"cancel_request_{consultation_id}")]
-                    ])
-                )
-            else:
-                # Простое подтверждение без кнопок
-                await message.answer("💌 Сохранено")
-
-        except Exception as e:
-            print(f"Buffer message error: {e}")
-            await message.answer("❌ Ошибка сохранения сообщения")
-
-@router.callback_query(F.data.startswith("call_florist_"))  
-async def call_florist(callback: types.CallbackQuery):
-    """Клиент запрашивает номер флориста"""
-    consultation_id = int(callback.data.split("_")[2])
+    if profile:
+        profile.rating = round(avg_rating, 2)
+        profile.reviews_count = reviews_count
+        profile.updated_at = datetime.utcnow()
     
-    async for session in get_session():
-        consultation = await session.get(Consultation, consultation_id)
-        if not consultation:
-            await callback.answer("Консультация не найдена", show_alert=True)
-            return
-            
-        await session.refresh(consultation, ['florist'])
-        florist_phone = consultation.florist.phone or "Не указан"
-        
-        # Отправляем номер текстом
-        await callback.message.answer(
-            f"📞 Номер флориста: `{florist_phone}`\n\n"
-            f"Нажмите на номер чтобы скопировать и позвоните через приложение телефона.",
-            parse_mode="Markdown"
-        )
-        await callback.answer("Номер отправлен")
-
-        if florist_phone != "Не указан":
-            clean_phone = florist_phone.replace("+", "")
-            tel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text=f"📞 Набрать", url=f"tel:{clean_phone}")]
-            ])
-            await callback.message.answer("👆 Или нажмите кнопку:", reply_markup=tel_kb)
-
-### 1.2 call_client() - флорист просит позвонить клиенту  
-@router.callback_query(F.data.startswith("call_client_"))
-async def call_client(callback: types.CallbackQuery):
-    """Флорист запрашивает номер клиента"""
-    consultation_id = int(callback.data.split("_")[2])
-    
-    async for session in get_session():
-        consultation = await session.get(Consultation, consultation_id)
-        if not consultation:
-            await callback.answer("Консультация не найдена", show_alert=True)
-            return
-            
-        await session.refresh(consultation, ['client'])
-        client_phone = consultation.client.phone or "Не указан"
-        
-        # Отправляем номер текстом с инструкцией
-        await callback.message.answer(
-            f"📞 Номер клиента: `{client_phone}`\n\n"
-            f"Нажмите на номер чтобы скопировать и позвоните через приложение телефона.",
-            parse_mode="Markdown"
-        )
-        await callback.answer("Номер отправлен")
-
-        if client_phone != "Не указан":
-            clean_phone = client_phone.replace("+", "")
-            tel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text=f"📞 Набрать", url=f"tel:{clean_phone}")]
-            ])
-            await callback.message.answer("👆 Или нажмите кнопку:", reply_markup=tel_kb)
-
-### 1.3 show_phone_info() - новый обработчик для кнопки "Номер"
-@router.callback_query(F.data == "show_phone")
-async def show_phone_info(callback: types.CallbackQuery):
-    """Показать информацию о номере телефона"""
-    await callback.answer("💡 Скопируйте номер телефона и наберите его через стандартное приложение", show_alert=True)
-
-## ШАГ 2: Добавление обработчика отмены запроса клиентом
-
-@router.callback_query(F.data.startswith("cancel_request_"))
-async def cancel_consultation_request(callback: types.CallbackQuery, state: FSMContext):
-    """🆕 Отмена запроса консультации клиентом"""
-    consultation_id = int(callback.data.split("_")[2])
-    
-    async for session in get_session():
-        user, lang = await _get_user_and_lang(session, callback.from_user.id)
-        consultation_service = ConsultationService(session)
-        
-        try:
-            # Отменяем консультацию (используем decline от имени клиента)
-            consultation = await consultation_service.decline_consultation(consultation_id, user.id)
-            
-            await callback.message.edit_text(
-                "❌ Запрос на консультацию отменён.",
-                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="🌸 Выбрать другого флориста", callback_data="consultation_start")],
-                    [types.InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
-                ])
-            )
-            
-            await state.clear()
-            await callback.answer("Запрос отменён")
-            
-        except Exception as e:
-            print(f"Cancel request error: {e}")
-            await callback.answer("Ошибка отмены", show_alert=True)
-
-
+    print(f"Updated florist {florist_id} rating: {avg_rating:.2f} ({reviews_count} reviews)")

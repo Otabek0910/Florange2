@@ -38,12 +38,18 @@ class RequestStatusEnum(enum.Enum):
     rejected = "rejected"
 
 class ConsultationStatusEnum(enum.Enum):
-    pending = "pending"                    # 🆕 Ожидание ответа флориста
+    # Новые правильные статусы
+    pending = "pending"                    # Ожидание ответа флориста
     active = "active"                      # Активная консультация  
+    completed = "completed"                # Завершена успешно
+    expired = "expired"                    # Истекла по таймауту
+    declined = "declined"                  # Отклонена флористом
+    
+    # Старые статусы из БД (оставляем для совместимости)
     completed_by_client = "completed_by_client"
     completed_by_florist = "completed_by_florist"
-    timeout_no_response = "timeout_no_response"    # 🆕 Флорист не ответил за 10 мин
-    force_closed = "force_closed"          # 🆕 Клиент принудительно вышел (/start)
+    timeout_no_response = "timeout_no_response" 
+    force_closed = "force_closed"
 
 class SupplyStatusEnum(enum.Enum):
     pending = "pending"      # Создан флористом
@@ -196,16 +202,16 @@ class Consultation(Base):
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     florist_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(Enum(ConsultationStatusEnum), default=ConsultationStatusEnum.pending)  # ✅ pending по умолчанию
+    status = Column(Enum(ConsultationStatusEnum), default=ConsultationStatusEnum.pending)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)
     theme = Column(String(255))  # ИИ-генерируемая тема
     archive_id = Column(String(100))  # ID архива в канале
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # ✅ ДОБАВЬТЕ ЭТИ ДВА ПОЛЯ:
-    request_key = Column(String(100), nullable=True)  # ✅ Ключ идемпотентности
-    expires_at = Column(DateTime, nullable=True)      # ✅ Время истечения для pending
+    # ✅ ДОБАВЛЕННЫЕ поля для корректной работы:
+    request_key = Column(String(100), nullable=True, unique=True)  # Ключ идемпотентности
+    expires_at = Column(DateTime, nullable=True)      # Время истечения для pending консультаций
     
     client = relationship("User", foreign_keys=[client_id])
     florist = relationship("User", foreign_keys=[florist_id])
@@ -366,16 +372,13 @@ class ProductComposition(Base):
     flower = relationship("Flower", back_populates="compositions")
     
 class ConsultationBuffer(Base):
-    """Буфер сообщений для pending консультаций"""
     __tablename__ = "consultation_buffer"
-    
     id = Column(Integer, primary_key=True)
-    consultation_id = Column(Integer, ForeignKey("consultations.id", ondelete="CASCADE"), nullable=False)
-    sender_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    message_text = Column(Text, nullable=True)
-    photo_file_id = Column(String(255), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    consultation_id = Column(Integer, ForeignKey("consultations.id"), nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    message_text = Column(Text)
+    photo_file_id = Column(String(255))
+    created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Связи
     consultation = relationship("Consultation")
     sender = relationship("User")
